@@ -19,8 +19,8 @@ impl LanguageAdapter for KotlinAdapter {
         &["kt", "kts"]
     }
 
-    fn language(&self, _path: &Path) -> Language {
-        tree_sitter_kotlin_ng::LANGUAGE.into()
+    fn language(&self, _path: &Path) -> Option<Language> {
+        Some(tree_sitter_kotlin_ng::LANGUAGE.into())
     }
 
     fn classify(

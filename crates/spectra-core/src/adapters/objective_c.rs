@@ -20,8 +20,8 @@ impl LanguageAdapter for ObjectiveCAdapter {
         &["m", "mm"]
     }
 
-    fn language(&self, _path: &Path) -> Language {
-        tree_sitter_objc::LANGUAGE.into()
+    fn language(&self, _path: &Path) -> Option<Language> {
+        Some(tree_sitter_objc::LANGUAGE.into())
     }
 
     fn classify(

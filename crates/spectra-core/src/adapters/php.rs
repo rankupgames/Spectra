@@ -16,11 +16,11 @@ impl LanguageAdapter for PhpAdapter {
     }
 
     fn extensions(&self) -> &'static [&'static str] {
-        &["php"]
+        &["php", "module", "install", "theme", "inc"]
     }
 
-    fn language(&self, _path: &Path) -> Language {
-        tree_sitter_php::LANGUAGE_PHP.into()
+    fn language(&self, _path: &Path) -> Option<Language> {
+        Some(tree_sitter_php::LANGUAGE_PHP.into())
     }
 
     fn classify(

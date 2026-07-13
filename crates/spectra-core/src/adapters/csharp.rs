@@ -19,8 +19,8 @@ impl LanguageAdapter for CSharpAdapter {
         &["cs"]
     }
 
-    fn language(&self, _path: &Path) -> Language {
-        tree_sitter_c_sharp::LANGUAGE.into()
+    fn language(&self, _path: &Path) -> Option<Language> {
+        Some(tree_sitter_c_sharp::LANGUAGE.into())
     }
 
     fn classify(

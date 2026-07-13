@@ -16,11 +16,11 @@ impl LanguageAdapter for JavaScriptAdapter {
     }
 
     fn extensions(&self) -> &'static [&'static str] {
-        &["js", "jsx", "mjs", "cjs"]
+        &["js", "jsx", "mjs", "cjs", "xsjs", "xsjslib"]
     }
 
-    fn language(&self, _path: &Path) -> Language {
-        tree_sitter_javascript::LANGUAGE.into()
+    fn language(&self, _path: &Path) -> Option<Language> {
+        Some(tree_sitter_javascript::LANGUAGE.into())
     }
 
     fn classify(

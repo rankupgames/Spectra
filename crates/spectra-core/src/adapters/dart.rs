@@ -19,8 +19,8 @@ impl LanguageAdapter for DartAdapter {
         &["dart"]
     }
 
-    fn language(&self, _path: &Path) -> Language {
-        tree_sitter_dart::LANGUAGE.into()
+    fn language(&self, _path: &Path) -> Option<Language> {
+        Some(tree_sitter_dart::LANGUAGE.into())
     }
 
     fn classify(

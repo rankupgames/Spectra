@@ -16,14 +16,14 @@ impl LanguageAdapter for TypeScriptAdapter {
     }
 
     fn extensions(&self) -> &'static [&'static str] {
-        &["ts", "tsx"]
+        &["ts", "tsx", "mts", "cts"]
     }
 
-    fn language(&self, path: &Path) -> Language {
+    fn language(&self, path: &Path) -> Option<Language> {
         if path.extension().is_some_and(|extension| extension == "tsx") {
-            tree_sitter_typescript::LANGUAGE_TSX.into()
+            Some(tree_sitter_typescript::LANGUAGE_TSX.into())
         } else {
-            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
+            Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
         }
     }
 

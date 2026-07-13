@@ -33,8 +33,8 @@ macro_rules! web_adapter {
                 $extensions
             }
 
-            fn language(&self, _path: &Path) -> Language {
-                $language.into()
+            fn language(&self, _path: &Path) -> Option<Language> {
+                Some($language.into())
             }
 
             fn classify(

@@ -13,11 +13,11 @@ impl LanguageAdapter for PythonAdapter {
     }
 
     fn extensions(&self) -> &'static [&'static str] {
-        &["py"]
+        &["py", "pyw"]
     }
 
-    fn language(&self, _path: &Path) -> Language {
-        tree_sitter_python::LANGUAGE.into()
+    fn language(&self, _path: &Path) -> Option<Language> {
+        Some(tree_sitter_python::LANGUAGE.into())
     }
 
     fn classify(

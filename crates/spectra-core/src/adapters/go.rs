@@ -16,8 +16,8 @@ impl LanguageAdapter for GoAdapter {
         &["go"]
     }
 
-    fn language(&self, _path: &Path) -> Language {
-        tree_sitter_go::LANGUAGE.into()
+    fn language(&self, _path: &Path) -> Option<Language> {
+        Some(tree_sitter_go::LANGUAGE.into())
     }
 
     fn classify(

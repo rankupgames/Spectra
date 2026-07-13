@@ -16,8 +16,8 @@ impl LanguageAdapter for JavaAdapter {
         &["java"]
     }
 
-    fn language(&self, _path: &Path) -> Language {
-        tree_sitter_java::LANGUAGE.into()
+    fn language(&self, _path: &Path) -> Option<Language> {
+        Some(tree_sitter_java::LANGUAGE.into())
     }
 
     fn classify(

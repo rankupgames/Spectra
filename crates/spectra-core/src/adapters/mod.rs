@@ -9,13 +9,16 @@ mod go;
 mod java;
 mod javascript;
 mod kotlin;
+mod legacy;
 mod lua_family;
+mod modern;
 mod objective_c;
 mod php;
 mod python;
 mod ruby;
 mod rust;
 mod scala;
+mod structured;
 mod swift;
 mod typescript;
 mod web;
@@ -33,7 +36,7 @@ pub(crate) use swift::SWIFT;
 pub(crate) use typescript::TYPESCRIPT;
 pub(crate) use web::{ASTRO, LIQUID, SVELTE, VUE};
 
-static ADAPTERS: [&dyn LanguageAdapter; 24] = [
+static ADAPTERS: [&dyn LanguageAdapter; 39] = [
     &RUST,
     &TYPESCRIPT,
     &JAVASCRIPT,
@@ -58,6 +61,21 @@ static ADAPTERS: [&dyn LanguageAdapter; 24] = [
     &OBJECTIVE_C,
     &CUDA,
     &METAL,
+    &R,
+    &NIX,
+    &ERLANG,
+    &SOLIDITY,
+    &TERRAFORM,
+    &PASCAL,
+    &ARKTS,
+    &RAZOR,
+    &VBNET,
+    &CFML,
+    &COBOL,
+    &YAML,
+    &TWIG,
+    &XML,
+    &PROPERTIES,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,13 +115,22 @@ pub(crate) struct EmbeddedRegion {
 pub(crate) trait LanguageAdapter: Sync {
     fn id(&self) -> &'static str;
     fn extensions(&self) -> &'static [&'static str];
-    fn language(&self, path: &Path) -> Language;
+    fn matches_path(&self, path: &Path) -> bool {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| self.extensions().contains(&extension))
+    }
+    fn language(&self, _path: &Path) -> Option<Language> {
+        None
+    }
     fn classify(
         &self,
-        node: SyntaxNode<'_>,
-        source: &[u8],
-        scopes: &[Scope],
-    ) -> Option<&'static str>;
+        _node: SyntaxNode<'_>,
+        _source: &[u8],
+        _scopes: &[Scope],
+    ) -> Option<&'static str> {
+        None
+    }
 
     fn label(&self, node: SyntaxNode<'_>, source: &[u8], mapped_kind: &str) -> Option<String> {
         if mapped_kind == "import" {
@@ -151,11 +178,10 @@ pub(crate) trait LanguageAdapter: Sync {
 }
 
 pub(crate) fn for_path(path: &Path) -> Option<&'static dyn LanguageAdapter> {
-    let extension = path.extension()?.to_str()?;
     ADAPTERS
         .iter()
         .copied()
-        .find(|adapter| adapter.extensions().contains(&extension))
+        .find(|adapter| adapter.matches_path(path))
 }
 
 pub fn is_supported_path(path: &Path) -> bool {
@@ -312,8 +338,55 @@ pub(crate) fn truncate(value: &str, max: usize) -> String {
         format!("{}…", value.chars().take(max - 1).collect::<String>())
     }
 }
+pub(crate) fn file_symbol(
+    kind: &'static str,
+    label: impl Into<String>,
+    line: usize,
+    relations: Vec<Relation>,
+) -> FileSymbol {
+    FileSymbol {
+        kind,
+        label: label.into(),
+        start_line: line as u32,
+        end_line: line as u32,
+        relations,
+    }
+}
+
+pub(crate) fn relation(kind: &'static str, target: impl Into<String>) -> Relation {
+    Relation {
+        kind,
+        target: target.into(),
+    }
+}
+
+pub(crate) fn quoted_values(source: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut quote = None;
+    let mut start = 0;
+    for (index, character) in source.char_indices() {
+        match quote {
+            Some(open) if character == open => {
+                if let Some(value) = source.get(start..index).filter(|value| !value.is_empty()) {
+                    values.push(value.to_owned());
+                }
+                quote = None;
+            }
+            None if matches!(character, '\'' | '"') => {
+                quote = Some(character);
+                start = index + character.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    values
+}
+
 pub(crate) use c_family::{C, CPP, CUDA, METAL};
 pub(crate) use csharp::CSHARP;
 pub(crate) use dart::DART;
+pub(crate) use legacy::{CFML, COBOL};
+pub(crate) use modern::{ARKTS, ERLANG, PASCAL, R, RAZOR, SOLIDITY, VBNET};
 pub(crate) use php::PHP;
 pub(crate) use ruby::RUBY;
+pub(crate) use structured::{NIX, PROPERTIES, TERRAFORM, TWIG, XML, YAML};

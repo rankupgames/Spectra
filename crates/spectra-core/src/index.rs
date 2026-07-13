@@ -317,14 +317,6 @@ fn parse_file(
     source: &str,
     hash: u64,
 ) -> Result<CachedFile> {
-    let mut parser = Parser::new();
-    parser
-        .set_language(&adapter.language(Path::new(path)))
-        .map_err(|error| Error::Parse(error.to_string()))?;
-    let tree = parser
-        .parse(source, None)
-        .ok_or_else(|| Error::Parse(format!("parser returned no tree for {path}")))?;
-
     let mut file = CachedFile {
         hash,
         language: adapter.id().into(),
@@ -378,19 +370,28 @@ fn parse_file(
     }
 
     let syntax_parent = component.unwrap_or(0);
-    let mut scopes = Vec::new();
-    visit(
-        adapter,
-        tree.root_node(),
-        source.as_bytes(),
-        &mut file,
-        VisitContext {
-            parent: syntax_parent,
-            owner: None,
-            line_offset: 0,
-        },
-        &mut scopes,
-    );
+    if let Some(language) = adapter.language(Path::new(path)) {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&language)
+            .map_err(|error| Error::Parse(error.to_string()))?;
+        let tree = parser
+            .parse(source, None)
+            .ok_or_else(|| Error::Parse(format!("parser returned no tree for {path}")))?;
+        let mut scopes = Vec::new();
+        visit(
+            adapter,
+            tree.root_node(),
+            source.as_bytes(),
+            &mut file,
+            VisitContext {
+                parent: syntax_parent,
+                owner: None,
+                line_offset: 0,
+            },
+            &mut scopes,
+        );
+    }
     for region in adapter.embedded_regions(source) {
         if region.start_byte >= region.end_byte
             || !source.is_char_boundary(region.start_byte)
@@ -408,8 +409,11 @@ fn parse_file(
             "javascript" => Path::new("embedded.js"),
             _ => Path::new("embedded.txt"),
         };
+        let Some(language) = embedded_adapter.language(embedded_path) else {
+            continue;
+        };
         embedded_parser
-            .set_language(&embedded_adapter.language(embedded_path))
+            .set_language(&language)
             .map_err(|error| Error::Parse(error.to_string()))?;
         let embedded_tree = embedded_parser
             .parse(fragment, None)
@@ -1070,20 +1074,182 @@ function fetchPost() {}
     }
 
     #[test]
+    fn extracts_yaml_properties_xml_and_twig_bridges() {
+        let yaml = parsed(
+            "config/routes.yaml",
+            "app.user_show:\n  path: /users/{id}\n  defaults:\n    _controller: App\\Controller\\UserController::show\nspring:\n  datasource:\n    url: ${DATABASE_URL}\n",
+        );
+        assert!(has_node(&yaml, "route", "app.user_show"));
+        assert!(has_node(&yaml, "constant", "spring.datasource.url"));
+        assert!(has_edge(&yaml, "routes_to", "show"));
+        assert!(has_edge(&yaml, "references", "DATABASE_URL"));
+
+        let properties = parsed(
+            "application.properties",
+            "spring.datasource.url=${DATABASE_URL}\nserver.port=8080\n",
+        );
+        assert!(has_node(&properties, "constant", "spring.datasource.url"));
+        assert!(has_edge(&properties, "references", "DATABASE_URL"));
+
+        let xml = parsed(
+            "UserMapper.xml",
+            r#"<mapper namespace="app.UserMapper">
+  <select id="findUser" resultMap="userMap">SELECT 1</select>
+</mapper>"#,
+        );
+        assert!(has_node(&xml, "module", "app.UserMapper"));
+        assert!(has_node(&xml, "query", "findUser"));
+        assert!(has_edge(&xml, "binds", "findUser"));
+
+        let twig = parsed(
+            "templates/user/card.html.twig",
+            "{% extends 'layout.html.twig' %}{% macro badge() %}{% endmacro %}{{ user.name }}",
+        );
+        assert!(has_node(&twig, "component", "card.html"));
+        assert!(has_node(&twig, "function", "badge"));
+        assert!(has_edge(&twig, "renders", "layout"));
+        assert!(has_edge(&twig, "binds", "user"));
+    }
+
+    #[test]
+    fn extracts_terraform_nix_r_erlang_and_solidity_structure() {
+        let terraform = parsed(
+            "main.tf",
+            r#"module "network" {
+  source = "./network"
+}
+resource "aws_instance" "web" {
+  subnet_id = module.network.subnet_id
+}"#,
+        );
+        assert!(has_node(&terraform, "module", "network"));
+        assert!(has_node(&terraform, "resource", "aws_instance.web"));
+        assert!(has_edge(&terraform, "imports", "./network"));
+        assert!(has_edge(&terraform, "references", "network"));
+
+        let nix = parsed(
+            "default.nix",
+            "{ callPackage }:\nlet helper = import ./helper.nix; app = value: helper value; in app\n",
+        );
+        assert!(has_node(&nix, "constant", "helper"));
+        assert!(has_node(&nix, "function", "app"));
+        assert!(has_edge(&nix, "imports", "./helper.nix"));
+
+        let r = parsed(
+            "app.r",
+            "library(dplyr)\nhelper <- function() {}\nrun <- function() { helper() }\n",
+        );
+        assert!(has_node(&r, "function", "run"));
+        assert!(has_edge(&r, "imports", "dplyr"));
+        assert!(has_edge(&r, "calls", "helper"));
+
+        let erlang = parsed(
+            "app.erl",
+            "-module(app).\n-behaviour(gen_server).\n-include(\"app.hrl\").\nrun() -> helper().\nhelper() -> ok.\n",
+        );
+        assert!(has_node(&erlang, "module", "app"));
+        assert!(has_node(&erlang, "function", "run"));
+        assert!(has_edge(&erlang, "imports", "app.hrl"));
+        assert!(has_edge(&erlang, "calls", "helper"));
+
+        let solidity = parsed(
+            "App.sol",
+            "contract Base {}\ncontract App is Base { function run() public { helper(); } function helper() internal {} }\n",
+        );
+        assert!(has_node(&solidity, "class", "App"));
+        assert!(has_node(&solidity, "method", "run"));
+        assert!(has_edge(&solidity, "inherits", "Base"));
+        assert!(has_edge(&solidity, "calls", "helper"));
+    }
+
+    #[test]
+    fn extracts_pascal_arkts_razor_and_vbnet_bridges() {
+        let pascal = parsed(
+            "App.pas",
+            "unit App;\nuses SysUtils, Helpers;\ntype TApp = class(TBase)\nprocedure Run; begin Helper(); end;\n",
+        );
+        assert!(has_node(&pascal, "module", "App"));
+        assert!(has_node(&pascal, "class", "TApp"));
+        assert!(has_node(&pascal, "function", "Run"));
+        assert!(has_edge(&pascal, "imports", "Helpers"));
+        assert!(has_edge(&pascal, "inherits", "TBase"));
+
+        let arkts = parsed(
+            "pages/Home.ets",
+            "@Entry\n@Component\nstruct Home { build() { router.pushUrl({ url: '/details' }) } }\n",
+        );
+        assert!(has_node(&arkts, "component", "Home"));
+        assert!(has_node(&arkts, "route", "/details"));
+
+        let razor = parsed(
+            "Pages/Counter.razor",
+            "@page \"/counter\"\n<Card @onclick=\"Increment\" />\n@code { void Increment() {} }\n",
+        );
+        assert!(has_node(&razor, "component", "Counter"));
+        assert!(has_node(&razor, "route", "/counter"));
+        assert!(has_node(&razor, "method", "Increment"));
+        assert!(has_edge(&razor, "renders", "Card"));
+        assert!(has_edge(&razor, "binds", "Increment"));
+        assert!(has_local_edge(&razor, "routes_to", "/counter", "Counter"));
+
+        let vb = parsed(
+            "App.vb",
+            "Imports Helpers\nPublic Class App\n  Inherits Base\n  Public Sub Run()\n    Helper()\n  End Sub\nEnd Class\n",
+        );
+        assert!(has_node(&vb, "class", "App"));
+        assert!(has_node(&vb, "method", "Run"));
+        assert!(has_edge(&vb, "imports", "Helpers"));
+        assert!(has_edge(&vb, "inherits", "Base"));
+        assert!(has_edge(&vb, "calls", "Helper"));
+    }
+
+    #[test]
+    fn extracts_cfml_queries_and_cobol_cics_calls() {
+        let cfml = parsed(
+            "User.cfc",
+            "component { function findUser() { helper(); } }\n<cfquery name=\"users\">SELECT 1</cfquery>\n<cfinclude template=\"shared.cfm\">\n",
+        );
+        assert!(has_node(&cfml, "class", "User"));
+        assert!(has_node(&cfml, "method", "findUser"));
+        assert!(has_node(&cfml, "query", "users"));
+        assert!(has_edge(&cfml, "imports", "shared.cfm"));
+        assert!(has_edge(&cfml, "calls", "helper"));
+
+        let cobol = parsed(
+            "PAYMENT.cbl",
+            "       PROGRAM-ID. PAYMENT.\n       COPY ACCOUNT.\nMAIN-SECTION SECTION.\n       CALL 'AUDIT'.\n       EXEC CICS LINK PROGRAM('BILLING') END-EXEC.\n",
+        );
+        assert!(has_node(&cobol, "module", "PAYMENT"));
+        assert!(has_node(&cobol, "function", "MAIN-SECTION"));
+        assert!(has_edge(&cobol, "imports", "ACCOUNT"));
+        assert!(has_edge(&cobol, "calls", "AUDIT"));
+        assert!(has_edge(&cobol, "calls", "BILLING"));
+    }
+
+    #[test]
     fn language_registry_is_the_discovery_contract() {
         let supported = adapters::supported_languages();
-        assert_eq!(supported.len(), 24);
+        assert_eq!(supported.len(), 39);
         for path in [
             "lib.rs",
             "app.tsx",
+            "app.mts",
+            "app.cts",
             "app.jsx",
+            "service.xsjs",
+            "library.xsjslib",
             "app.py",
+            "window.pyw",
             "app.go",
             "App.java",
             "app.c",
             "app.cpp",
             "App.cs",
             "app.php",
+            "feature.module",
+            "feature.install",
+            "feature.theme",
+            "shared.inc",
             "app.rb",
             "App.swift",
             "App.kt",
@@ -1098,6 +1264,28 @@ function fetchPost() {}
             "App.m",
             "render.cu",
             "shader.metal",
+            "analysis.r",
+            "default.nix",
+            "app.erl",
+            "service.app.src",
+            "Token.sol",
+            "main.tf",
+            "vars.tfvars",
+            "main.tofu",
+            "App.pas",
+            "App.dpr",
+            "Page.ets",
+            "Page.cshtml",
+            "Component.razor",
+            "App.vb",
+            "Service.cfc",
+            "page.cfm",
+            "script.cfs",
+            "program.cbl",
+            "routes.yaml",
+            "page.twig",
+            "mapper.xml",
+            "application.properties",
         ] {
             assert!(adapters::for_path(Path::new(path)).is_some(), "{path}");
         }
@@ -1342,6 +1530,68 @@ function handleClick() {}
                 index.graph.label(source),
                 index.graph.label(target)
             );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refresh_resolves_config_and_mapper_language_bridges() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "spectra-structured-bridge-test-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("UserMapper.java"),
+            "interface UserMapper { User findUser(); } class User {}\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("UserMapper.xml"),
+            "<mapper namespace=\"app.UserMapper\"><select id=\"findUser\">SELECT 1</select></mapper>\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("UserController.php"),
+            "<?php class UserController { public function show() {} }\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("routes.yaml"),
+            "app.user_show:\n  path: /users/{id}\n  defaults:\n    _controller: App\\Controller\\UserController::show\n",
+        )
+        .unwrap();
+
+        let (index, report) = CodeIndex::refresh(&root).unwrap();
+        assert_eq!(report.files, 4);
+        let find = |kind: &str, label: &str| {
+            index
+                .graph
+                .nodes
+                .iter()
+                .find(|node| {
+                    index.graph.kind(node.id) == kind && index.graph.atom(node.label) == label
+                })
+                .unwrap()
+                .id
+        };
+        let query = find("query", "findUser");
+        let mapper_method = find("method", "findUser");
+        let route = find("route", "app.user_show");
+        let controller = find("method", "show");
+        for (source, target, kind) in [
+            (query, mapper_method, "binds"),
+            (route, controller, "routes_to"),
+        ] {
+            assert!(index.graph.edges.iter().any(|edge| {
+                edge.source == source
+                    && edge.target == target
+                    && index.graph.atom(edge.kind) == kind
+            }));
         }
         fs::remove_dir_all(root).unwrap();
     }

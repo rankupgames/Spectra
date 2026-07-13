@@ -25,8 +25,8 @@ impl LanguageAdapter for CAdapter {
         &["c", "h"]
     }
 
-    fn language(&self, _path: &Path) -> Language {
-        tree_sitter_c::LANGUAGE.into()
+    fn language(&self, _path: &Path) -> Option<Language> {
+        Some(tree_sitter_c::LANGUAGE.into())
     }
 
     fn classify(
@@ -60,8 +60,8 @@ impl LanguageAdapter for CppAdapter {
         &["cpp", "cc", "cxx", "hpp", "hh", "hxx"]
     }
 
-    fn language(&self, _path: &Path) -> Language {
-        tree_sitter_cpp::LANGUAGE.into()
+    fn language(&self, _path: &Path) -> Option<Language> {
+        Some(tree_sitter_cpp::LANGUAGE.into())
     }
 
     fn classify(
@@ -102,8 +102,8 @@ impl LanguageAdapter for CudaAdapter {
         &["cu", "cuh"]
     }
 
-    fn language(&self, _path: &Path) -> Language {
-        tree_sitter_cuda::LANGUAGE.into()
+    fn language(&self, _path: &Path) -> Option<Language> {
+        Some(tree_sitter_cuda::LANGUAGE.into())
     }
 
     fn classify(
@@ -147,8 +147,8 @@ impl LanguageAdapter for MetalAdapter {
         &["metal"]
     }
 
-    fn language(&self, _path: &Path) -> Language {
-        tree_sitter_cpp::LANGUAGE.into()
+    fn language(&self, _path: &Path) -> Option<Language> {
+        Some(tree_sitter_cpp::LANGUAGE.into())
     }
 
     fn classify(

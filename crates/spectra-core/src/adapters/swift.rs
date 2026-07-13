@@ -19,8 +19,8 @@ impl LanguageAdapter for SwiftAdapter {
         &["swift"]
     }
 
-    fn language(&self, _path: &Path) -> Language {
-        tree_sitter_swift::LANGUAGE.into()
+    fn language(&self, _path: &Path) -> Option<Language> {
+        Some(tree_sitter_swift::LANGUAGE.into())
     }
 
     fn classify(

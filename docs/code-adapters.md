@@ -44,11 +44,26 @@ Core extraction, ecosystem routing, and language bridges may land separately, bu
 | Objective-C | `.m`, `.mm` | Implemented | Calls, imports, inheritance, protocols, implementations, message sends | C/Objective-C header and implementation resolution implemented |
 | CUDA | `.cu`, `.cuh` | Implemented | Calls, includes, inheritance, kernel launches | C++-family definitions and CUDA kernels share the common resolver |
 | Metal | `.metal` | Implemented over the C++ grammar | Calls, includes, inheritance, shader entry points | C++-family definitions and Metal kernels share the common resolver |
+| R | `.r`, `.R` | Implemented | Functions, S4 classes/generics/methods | Package imports and calls implemented |
+| Nix | `.nix` | Implemented | Attribute bindings and functions | `import` and `callPackage` bridges implemented |
+| Erlang | `.erl`, `.hrl`, `.escript`, `.app`, `.app.src` | Implemented | Modules, functions, behaviours | Header imports, local and remote calls implemented |
+| Solidity | `.sol` | Implemented | Contracts, interfaces, libraries, functions, modifiers, events | Imports, inheritance, and calls implemented |
+| Terraform / OpenTofu | `.tf`, `.tfvars`, `.tofu` | Implemented | Resource, data, module, variable, output, and provider blocks | Module sources and expression references implemented |
+| Pascal / Delphi | `.pas`, `.dpr`, `.dpk`, `.lpr`, `.dfm`, `.fmx` | Implemented | Units, programs, classes, procedures, functions | Uses/imports, inheritance, and calls implemented |
+| ArkTS | `.ets` | Implemented over the TypeScript grammar plus ArkUI extraction | TypeScript symbols and ArkUI components | ArkUI navigation routes implemented |
+| Razor | `.cshtml`, `.razor` | Implemented | Components and code-block methods | Blazor routes, component renders, and event bindings implemented |
+| Visual Basic .NET | `.vb` | Implemented | Namespaces, modules, types, methods | Imports, inheritance, implementations, and calls implemented |
+| CFML / CFScript / CFQuery | `.cfc`, `.cfm`, `.cfs` | Implemented | Components, functions, and queries | Includes, template imports, and calls implemented |
+| COBOL | `.cbl`, `.cob`, `.cobol`, `.cpy` | Implemented | Programs, sections, and paragraphs | COPY, CALL, PERFORM, and CICS LINK edges implemented |
+| YAML | `.yml`, `.yaml` | Implemented | Nested configuration leaf symbols | Drupal controller routes and placeholder references implemented |
+| Twig | `.twig` | Implemented | Templates, blocks, and macros | Extends/includes/imports and output bindings implemented |
+| XML | `.xml` | Implemented for structured mapper content | MyBatis namespaces, statements, and fragments | Statement-to-mapper method bindings and result-map references implemented |
+| Properties | `.properties` | Implemented | Configuration key symbols | Placeholder references implemented |
 
 The common resolver prefers exact-case definitions compatible with the edge type, then falls back to case-insensitive matching. Multiple eligible candidates produce a typed uncertain boundary, preserving ambiguity in the rendered topology. Conventional page routes use local `routes_to` edges, while embedded script symbols remain contained by their component and participate in normal cross-file resolution.
 
 ## Parity baseline
 
-The baseline is CodeGraph v1.3.0 as installed when v0.2 development began. Remaining families include R, Nix, Erlang, Solidity, Terraform/OpenTofu, Pascal/Delphi, ArkTS, Razor, Visual Basic .NET, CFML/CFScript/CFQuery, COBOL, YAML, Twig, XML, and properties files. CUDA and Metal are C++ dialects in CodeGraph; Spectra uses dedicated adapters for their kernel semantics while preserving C++-family resolution.
+The baseline is CodeGraph v1.3.0 as installed when v0.2 development began. Its complete language and extension surface is represented by the 39 adapters above. CUDA and Metal are C++ dialects in CodeGraph; Spectra uses dedicated adapters for their kernel semantics while preserving C++-family resolution. Erlang application manifests (`.app` and `.app.src`) are recognized through path-aware detection.
 
-Parity is pinned to this baseline so a moving upstream language list cannot silently change the release gate. Later CodeGraph additions can be adopted deliberately.
+Parity is pinned to this baseline so a moving upstream language list cannot silently change the release gate. The registry and extraction fixtures enforce that surface. Remaining v0.2 work is framework-resolver breadth, cross-language bridge coverage, and measured representative-repository evaluation; later CodeGraph additions can be adopted deliberately.

@@ -18,8 +18,8 @@ impl LanguageAdapter for RustAdapter {
         &["rs"]
     }
 
-    fn language(&self, _path: &Path) -> Language {
-        tree_sitter_rust::LANGUAGE.into()
+    fn language(&self, _path: &Path) -> Option<Language> {
+        Some(tree_sitter_rust::LANGUAGE.into())
     }
 
     fn classify(
