@@ -3,21 +3,27 @@ use std::{
     io::Write,
     path::PathBuf,
     process::{Command, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use spectra_core::{LedgerState, LedgerStore};
 
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, symlink};
+
+static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn fixture() -> PathBuf {
-    let unique = SystemTime::now()
+    let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root =
-        std::env::temp_dir().join(format!("spectra-cli-test-{}-{unique}", std::process::id()));
+    let sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!(
+        "spectra-cli-test-{}-{timestamp}-{sequence}",
+        std::process::id()
+    ));
     fs::create_dir_all(root.join("src")).unwrap();
     fs::write(
         root.join("src/lib.rs"),
@@ -161,13 +167,13 @@ esac
             .unwrap()
     };
 
-    let preview = run(&["install", "--dry-run"]);
+    let preview = run(&["install", "--agent", "codex", "--dry-run"]);
     assert!(preview.status.success());
     assert!(String::from_utf8_lossy(&preview.stdout).contains("Would configure"));
     assert!(!state.exists());
     assert!(!codex_home.join("hooks.json").exists());
 
-    let first = run(&["install"]);
+    let first = run(&["install", "--agent", "codex"]);
     assert!(
         first.status.success(),
         "{}",
@@ -182,7 +188,7 @@ esac
     }));
     fs::write(&hooks_path, serde_json::to_vec_pretty(&hooks).unwrap()).unwrap();
 
-    let second = run(&["install"]);
+    let second = run(&["install", "--agent", "codex"]);
     assert!(
         second.status.success(),
         "{}",
@@ -190,14 +196,14 @@ esac
     );
     assert!(String::from_utf8_lossy(&second.stdout).contains("already configured"));
 
-    let status = run(&["status"]);
+    let status = run(&["status", "--agent", "codex"]);
     assert!(status.status.success());
     assert_eq!(
         String::from_utf8_lossy(&status.stdout).trim(),
         "Codex: MCP=current, Ledger hooks=current"
     );
 
-    let removed = run(&["uninstall"]);
+    let removed = run(&["uninstall", "--agent", "codex"]);
     assert!(
         removed.status.success(),
         "{}",
@@ -205,7 +211,7 @@ esac
     );
     assert!(String::from_utf8_lossy(&removed.stdout).contains("Removed"));
     assert_eq!(
-        String::from_utf8_lossy(&run(&["status"]).stdout).trim(),
+        String::from_utf8_lossy(&run(&["status", "--agent", "codex"]).stdout).trim(),
         "Codex: MCP=missing, Ledger hooks=missing"
     );
     let hooks: serde_json::Value = serde_json::from_slice(&fs::read(&hooks_path).unwrap()).unwrap();
@@ -220,7 +226,7 @@ esac
         r#"{"name":"spectra","transport":{"type":"stdio","command":"/usr/bin/other","args":["serve","--mcp"]}}"#,
     )
     .unwrap();
-    let conflict = run(&["install"]);
+    let conflict = run(&["install", "--agent", "codex"]);
     assert!(!conflict.status.success());
     assert!(String::from_utf8_lossy(&conflict.stderr).contains("refusing to overwrite"));
     assert!(
@@ -228,6 +234,357 @@ esac
             .unwrap()
             .contains("/usr/bin/other")
     );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn standard_json_agent_installers_are_owned_idempotent_and_reversible() {
+    let root = fixture();
+    let binary = env!("CARGO_BIN_EXE_spectra");
+    let targets = [
+        ("claude", "SPECTRA_CLAUDE_CONFIG"),
+        ("cursor", "SPECTRA_CURSOR_CONFIG"),
+        ("gemini", "SPECTRA_GEMINI_CONFIG"),
+        ("antigravity", "SPECTRA_ANTIGRAVITY_CONFIG"),
+        ("kiro", "SPECTRA_KIRO_CONFIG"),
+    ];
+
+    for (agent, variable) in targets {
+        let path = root.join(format!("{agent}.json"));
+        fs::write(
+            &path,
+            r#"{
+  "unrelated": true,
+  "mcpServers": {
+    "other": {"command": "other", "args": []}
+  }
+}
+"#,
+        )
+        .unwrap();
+        let run = |command: &str| {
+            Command::new(binary)
+                .args([command, "--agent", agent])
+                .env(variable, &path)
+                .output()
+                .unwrap()
+        };
+
+        let installed = run("install");
+        assert!(
+            installed.status.success(),
+            "{agent}: {}",
+            String::from_utf8_lossy(&installed.stderr)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(value["unrelated"], true);
+        assert_eq!(value["mcpServers"]["other"]["command"], "other");
+        assert_eq!(
+            value["mcpServers"]["spectra"]["args"],
+            serde_json::json!(["serve", "--mcp"])
+        );
+
+        let second = run("install");
+        assert!(second.status.success());
+        assert!(String::from_utf8_lossy(&second.stdout).contains("already configured"));
+        let status = run("status");
+        assert!(status.status.success());
+        assert!(String::from_utf8_lossy(&status.stdout).contains("MCP=current"));
+
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        value["mcpServers"]["spectra"]["command"] = "/old/location/spectra".into();
+        fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+        let updated = run("install");
+        assert!(updated.status.success());
+        assert!(String::from_utf8_lossy(&updated.stdout).contains("updated"));
+        assert!(String::from_utf8_lossy(&run("status").stdout).contains("MCP=current"));
+
+        let removed = run("uninstall");
+        assert!(removed.status.success());
+        let value: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert!(value["mcpServers"].get("spectra").is_none());
+        assert_eq!(value["mcpServers"]["other"]["command"], "other");
+    }
+
+    let conflict = root.join("foreign.json");
+    let original = r#"{"mcpServers":{"spectra":{"command":"other","args":[]}}}"#;
+    fs::write(&conflict, original).unwrap();
+    let output = Command::new(binary)
+        .args(["install", "--agent", "claude"])
+        .env("SPECTRA_CLAUDE_CONFIG", &conflict)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("refusing to overwrite"));
+    assert_eq!(fs::read_to_string(conflict).unwrap(), original);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn installer_preserves_symlinked_configuration_files() {
+    let root = fixture();
+    let real = root.join("real-claude.json");
+    let linked = root.join("linked-claude.json");
+    fs::write(&real, "{}\n").unwrap();
+    symlink(&real, &linked).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_spectra"))
+        .args(["install", "--agent", "claude"])
+        .env("SPECTRA_CLAUDE_CONFIG", &linked)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(linked.is_symlink());
+    let value: serde_json::Value = serde_json::from_slice(&fs::read(real).unwrap()).unwrap();
+    assert!(value["mcpServers"]["spectra"].is_object());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn opencode_jsonc_preserves_comments_and_unrelated_servers() {
+    let root = fixture();
+    let path = root.join("opencode.json");
+    fs::write(
+        &path,
+        r#"{
+  // this comment belongs to the user
+  "theme": "system",
+  "mcp": {
+    "other": { "type": "local", "command": ["other"] },
+  },
+}
+"#,
+    )
+    .unwrap();
+    let run = |command: &str| {
+        Command::new(env!("CARGO_BIN_EXE_spectra"))
+            .args([command, "--agent", "open-code"])
+            .env("SPECTRA_OPENCODE_CONFIG", &path)
+            .output()
+            .unwrap()
+    };
+
+    let before = fs::read_to_string(&path).unwrap();
+    let preview = Command::new(env!("CARGO_BIN_EXE_spectra"))
+        .args(["install", "--agent", "open-code", "--dry-run"])
+        .env("SPECTRA_OPENCODE_CONFIG", &path)
+        .output()
+        .unwrap();
+    assert!(preview.status.success());
+    assert_eq!(fs::read_to_string(&path).unwrap(), before);
+
+    let installed = run("install");
+    assert!(
+        installed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&installed.stderr)
+    );
+    let configured = fs::read_to_string(&path).unwrap();
+    assert!(configured.contains("// this comment belongs to the user"));
+    assert!(configured.contains("\"theme\": \"system\""));
+    assert!(configured.contains("\"other\""));
+    assert!(configured.contains("\"spectra\""));
+    assert!(String::from_utf8_lossy(&run("status").stdout).contains("MCP=current"));
+
+    let executable = fs::canonicalize(env!("CARGO_BIN_EXE_spectra")).unwrap();
+    let stale = configured.replace(executable.to_str().unwrap(), "/old/location/spectra");
+    fs::write(&path, stale).unwrap();
+    let updated = run("install");
+    assert!(updated.status.success());
+    assert!(String::from_utf8_lossy(&updated.stdout).contains("updated"));
+
+    let removed = run("uninstall");
+    assert!(removed.status.success());
+    let configured = fs::read_to_string(&path).unwrap();
+    assert!(configured.contains("// this comment belongs to the user"));
+    assert!(configured.contains("\"other\""));
+    assert!(!configured.contains("\"spectra\""));
+
+    let foreign = r#"{
+  // preserve me
+  "mcp": {
+    "spectra": { "type": "local", "command": ["other"] }
+  }
+}
+"#;
+    fs::write(&path, foreign).unwrap();
+    let conflict = run("install");
+    assert!(!conflict.status.success());
+    assert!(String::from_utf8_lossy(&conflict.stderr).contains("refusing to overwrite"));
+    assert_eq!(fs::read_to_string(&path).unwrap(), foreign);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn hermes_yaml_preserves_unrelated_configuration() {
+    let root = fixture();
+    let path = root.join("config.yaml");
+    fs::write(
+        &path,
+        "# user configuration\nmodel: test\nmcp_servers:\n  other:\n    command: other\n    args: []\n",
+    )
+    .unwrap();
+    let run = |command: &str| {
+        Command::new(env!("CARGO_BIN_EXE_spectra"))
+            .args([command, "--agent", "hermes"])
+            .env("SPECTRA_HERMES_CONFIG", &path)
+            .output()
+            .unwrap()
+    };
+
+    let before = fs::read_to_string(&path).unwrap();
+    let preview = Command::new(env!("CARGO_BIN_EXE_spectra"))
+        .args(["install", "--agent", "hermes", "--dry-run"])
+        .env("SPECTRA_HERMES_CONFIG", &path)
+        .output()
+        .unwrap();
+    assert!(preview.status.success());
+    assert_eq!(fs::read_to_string(&path).unwrap(), before);
+
+    let installed = run("install");
+    assert!(
+        installed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&installed.stderr)
+    );
+    let configured = fs::read_to_string(&path).unwrap();
+    assert!(configured.contains("# user configuration"));
+    assert!(configured.contains("  other:"));
+    assert!(configured.contains("  spectra:"));
+    assert!(String::from_utf8_lossy(&run("status").stdout).contains("MCP=current"));
+
+    let executable = fs::canonicalize(env!("CARGO_BIN_EXE_spectra")).unwrap();
+    let stale = configured.replace(executable.to_str().unwrap(), "/old/location/spectra");
+    fs::write(&path, stale).unwrap();
+    let updated = run("install");
+    assert!(updated.status.success());
+    assert!(String::from_utf8_lossy(&updated.stdout).contains("updated"));
+
+    let removed = run("uninstall");
+    assert!(removed.status.success());
+    let configured = fs::read_to_string(&path).unwrap();
+    assert!(configured.contains("  other:"));
+    assert!(!configured.contains("  spectra:"));
+
+    let foreign = "mcp_servers:\n  spectra:\n    command: other\n    args: []\n";
+    fs::write(&path, foreign).unwrap();
+    let conflict = run("install");
+    assert!(!conflict.status.success());
+    assert!(String::from_utf8_lossy(&conflict.stderr).contains("refusing to overwrite"));
+    assert_eq!(fs::read_to_string(&path).unwrap(), foreign);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn malformed_agent_configs_are_never_overwritten() {
+    let root = fixture();
+    let cases = [
+        (
+            "claude",
+            "SPECTRA_CLAUDE_CONFIG",
+            root.join("claude.json"),
+            r#"{"mcpServers": []}"#,
+        ),
+        (
+            "open-code",
+            "SPECTRA_OPENCODE_CONFIG",
+            root.join("opencode.json"),
+            r#"{"mcp": []}"#,
+        ),
+        (
+            "hermes",
+            "SPECTRA_HERMES_CONFIG",
+            root.join("hermes.yaml"),
+            "mcp_servers: []\n",
+        ),
+    ];
+
+    for (agent, variable, path, contents) in cases {
+        fs::write(&path, contents).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_spectra"))
+            .args(["install", "--agent", agent])
+            .env(variable, &path)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{agent} unexpectedly succeeded");
+        assert_eq!(fs::read_to_string(path).unwrap(), contents);
+    }
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn auto_configures_every_detected_agent_without_host_leakage() {
+    let root = fixture();
+    let claude = root.join("claude.json");
+    let cursor = root.join("cursor.json");
+    fs::write(&claude, "{}\n").unwrap();
+    fs::write(&cursor, "{}\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_spectra"))
+        .arg("install")
+        .env("PATH", &root)
+        .env("SPECTRA_HOME", &root)
+        .env("SPECTRA_CLAUDE_CONFIG", &claude)
+        .env("SPECTRA_CURSOR_CONFIG", &cursor)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Claude Code:"));
+    assert!(stdout.contains("Cursor:"));
+    assert!(!stdout.contains("Codex:"));
+    assert!(serde_json::from_slice::<serde_json::Value>(&fs::read(claude).unwrap())
+        .unwrap()["mcpServers"]["spectra"]
+        .is_object());
+    assert!(serde_json::from_slice::<serde_json::Value>(&fs::read(cursor).unwrap())
+        .unwrap()["mcpServers"]["spectra"]
+        .is_object());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn auto_reports_a_conflict_without_skipping_other_detected_agents() {
+    let root = fixture();
+    let claude = root.join("claude.json");
+    let cursor = root.join("cursor.json");
+    fs::write(
+        &claude,
+        r#"{"mcpServers":{"spectra":{"command":"other","args":[]}}}"#,
+    )
+    .unwrap();
+    fs::write(&cursor, "{}\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_spectra"))
+        .arg("install")
+        .env("PATH", &root)
+        .env("SPECTRA_HOME", &root)
+        .env("SPECTRA_CLAUDE_CONFIG", &claude)
+        .env("SPECTRA_CURSOR_CONFIG", &cursor)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Cursor:"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Claude Code:"));
+    assert!(serde_json::from_slice::<serde_json::Value>(&fs::read(cursor).unwrap())
+        .unwrap()["mcpServers"]["spectra"]
+        .is_object());
 
     fs::remove_dir_all(root).unwrap();
 }

@@ -1,9 +1,11 @@
 use std::{
     fmt, fs,
+    io::Write,
     path::{Path, PathBuf},
     process::{Command, Output},
 };
 
+use atomic_write_file::AtomicWriteFile;
 use serde_json::Value;
 
 const SERVER_NAME: &str = "spectra";
@@ -346,11 +348,16 @@ fn write_hooks(value: &Value) -> Result<(), Box<dyn std::error::Error>> {
     let path = hooks_path()?;
     let parent = path.parent().ok_or("hooks.json has no parent directory")?;
     fs::create_dir_all(parent)?;
-    let temporary = parent.join("hooks.json.spectra.tmp");
     let mut encoded = serde_json::to_vec_pretty(value)?;
     encoded.push(b'\n');
-    fs::write(&temporary, encoded)?;
-    fs::rename(temporary, path)?;
+    let destination = if path.is_symlink() {
+        path.canonicalize()?
+    } else {
+        path.to_path_buf()
+    };
+    let mut file = AtomicWriteFile::open(destination)?;
+    file.write_all(&encoded)?;
+    file.commit()?;
     Ok(())
 }
 

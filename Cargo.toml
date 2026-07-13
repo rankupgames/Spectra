@@ -6,12 +6,16 @@ resolver = "2"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-rust-version = "1.87"
+rust-version = "1.88"
+repository = "https://github.com/rankupgames/Spectra"
+homepage = "https://github.com/rankupgames/Spectra"
 
 [workspace.dependencies]
+atomic-write-file = { version = "0.3.0", default-features = false }
 base64 = "0.22.1"
 clap = { version = "4.6.1", features = ["derive"] }
 ignore = "0.4.28"
+jsonc-parser = { version = "0.33.0", default-features = false, features = ["cst", "serde_json"] }
 resvg = { version = "0.47.0", default-features = true }
 rmcp = { version = "2.2.0", default-features = false, features = ["base64", "macros", "server", "transport-io"] }
 schemars = "1.2.1"
@@ -21,4 +25,3 @@ tiny-skia = "0.12.0"
 tokio = { version = "1.52.3", features = ["io-std", "macros", "rt-multi-thread"] }
 tree-sitter = "0.26.11"
 tree-sitter-rust = "0.24.2"
-

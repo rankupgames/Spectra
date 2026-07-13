@@ -1,4 +1,5 @@
 /target/
 /.spectra/
+/.codegraph/
 /.env
 /benchmarks/results/

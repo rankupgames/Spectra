@@ -1,11 +1,22 @@
 [package]
-name = "spectra-core"
+name = "spectra-context-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Core graph, topology, indexing, rendering, and context-ledger engine for Spectra"
+readme = "../../README.md"
+keywords = ["ai-agents", "code-analysis", "tree-sitter", "graph", "context"]
+categories = ["development-tools", "data-structures"]
+publish = false
+
+[lib]
+name = "spectra_core"
 
 [dependencies]
+atomic-write-file.workspace = true
 ignore.workspace = true
 resvg.workspace = true
 serde.workspace = true
@@ -13,4 +24,3 @@ serde_json.workspace = true
 tiny-skia.workspace = true
 tree-sitter.workspace = true
 tree-sitter-rust.workspace = true
-

@@ -214,7 +214,7 @@ impl PackedGraph {
                 return Err(Error::Graph("node IDs must be contiguous".into()));
             }
             if self.atoms.resolve(node.kind).is_none() || self.atoms.resolve(node.label).is_none() {
-                return Err(Error::Graph(format!("node {} has an invalid atom", index)));
+                return Err(Error::Graph(format!("node {index} has an invalid atom")));
             }
         }
         for (index, edge) in self.edges.iter().enumerate() {
@@ -223,12 +223,11 @@ impl PackedGraph {
             }
             if self.node(edge.source).is_none() || self.node(edge.target).is_none() {
                 return Err(Error::Graph(format!(
-                    "edge {} has an invalid endpoint",
-                    index
+                    "edge {index} has an invalid endpoint"
                 )));
             }
             if self.atoms.resolve(edge.kind).is_none() {
-                return Err(Error::Graph(format!("edge {} has an invalid kind", index)));
+                return Err(Error::Graph(format!("edge {index} has an invalid kind")));
             }
         }
         Ok(())

@@ -2,7 +2,7 @@
 
 **A smaller, more useful memory for local AI coding agents.**
 
-[![Rust 1.87+](https://img.shields.io/badge/Rust-1.87%2B-CE412B?logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-CE412B?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22C55E.svg)](LICENSE)
 [![Status: Prototype](https://img.shields.io/badge/Status-Prototype-F59E0B.svg)](#project-status)
 
@@ -18,9 +18,9 @@ Agent lifecycle ──adapter hooks──▶ immutable ledger ──▶ bounded 
 Instead of dumping source up front, Spectra lets the model see the shape of the system, choose an exact `path:start-end` anchor, and read code once it knows what it is looking for.
 
 > [!IMPORTANT]
-> Spectra is an early prototype. The current code adapter supports Rust, and the automatic agent integration targets Codex. See [Project status](#project-status) before relying on it in production.
+> Spectra is an early prototype. The current code adapter supports Rust, and automatic topology setup supports eight local agents. Lifecycle Ledger integration is currently limited to Codex. See [Project status](#project-status) before relying on it in production.
 
-Codex is only the first integration we could test locally—not the intended boundary of the project. Automatic setup for Claude Code, Cursor, OpenCode, Hermes Agent, Gemini CLI, Antigravity, and Kiro is the next milestone. The [agent support contract](docs/agent-support.md) tracks topology and Ledger support separately.
+The [agent support contract](docs/agent-support.md) tracks topology and Ledger support separately so an MCP integration is never mistaken for lifecycle coverage.
 
 ## Why Spectra?
 
@@ -37,39 +37,39 @@ Most code-context tools answer with source and explanation together. That can be
 
 | Evaluation | Result |
 | --- | ---: |
-| Median provider-input reduction vs. CodeGraph | **89.7%** |
-| CodeGraph composite-quality retention | **98.3%** |
+| Median provider-input reduction | **89.7%** |
+| Composite-quality retention | **98.3%** |
 | Ledger median estimated-token reduction | **93.4%** |
 | Ledger fact retention | **100%** |
 | Maximum Ledger projection | **57 tokens** |
 
 These numbers come from nine frozen prompts across pinned ripgrep, Tokio, and rust-analyzer repositories using Grok 4.5. They are encouraging, but they are still prototype results—not a promise that every model and repository will behave the same way. The reproducible methodology, prompts, and limitations are documented in the [benchmark protocol](benchmarks/README.md). Generated result artifacts stay local and are not committed.
 
-## Try it from source
+## Quickstart
 
-Spectra does not have packaged releases yet. The steps below assume you already have a local clone of this repository. A public one-command installer will replace this section once the repository and signed release artifacts are available.
+Spectra does not have packaged binaries yet, but Cargo can install the current release candidate directly from GitHub:
 
 ### Requirements
 
-- Rust 1.87 or newer
-- Codex with lifecycle-hook support for the automatic setup shown below
+- Rust 1.88 or newer
+- At least one supported local agent: Claude Code, Cursor, Codex, OpenCode, Hermes Agent, Gemini CLI, Antigravity, or Kiro
 - A Rust repository to map
 
-Other MCP clients can already run `spectra serve --mcp` manually. Their one-command installers and Ledger adapters are still being built.
+Any MCP client can also run `spectra serve --mcp` manually.
 
-### 1. Build the CLI from this checkout
+### 1. Install Spectra
 
 ```sh
-cargo install --path crates/spectra-cli --bin spectra --locked
+cargo install --git https://github.com/rankupgames/Spectra.git --bin spectra --locked
 ```
 
-### 2. Connect it to Codex
+### 2. Connect your agents
 
 ```sh
 spectra install
 ```
 
-Restart Codex, open `/hooks`, and review the **Spectra context ledger** hook once. Codex asks you to trust non-managed hooks rather than quietly running them, which is a good safety boundary.
+Spectra detects every supported agent installed on your machine and configures all of them in one pass. Restart any agents it reports. If Codex is among them, open `/hooks` and review the **Spectra context ledger** hook once; Codex keeps that trust decision in your hands.
 
 Confirm the installation:
 
@@ -80,8 +80,11 @@ spectra status
 Expected output:
 
 ```text
+Claude Code: MCP=current, Ledger=not available
 Codex: MCP=current, Ledger hooks=current
 ```
+
+Your output only lists the agents Spectra detected. Every supported agent gets visual topology; Codex also gets the lifecycle Ledger. Spectra will not claim Ledger support for another agent until that agent's lifecycle protocol is documented and replay-tested.
 
 After that, there is nothing to babysit. Spectra creates project data when it is first needed and checks for changes before every map. You do not need to run a daemon, remember a `sync` command, or initialize each repository by hand.
 
@@ -134,9 +137,9 @@ On Codex, the Ledger also notices supported approvals, `apply_patch` edits, veri
 ## CLI reference
 
 ```text
-spectra install [--agent codex] [--dry-run]
-spectra status [--agent codex]
-spectra uninstall [--agent codex] [--dry-run]
+spectra install [--agent auto|all|claude|cursor|codex|open-code|hermes|gemini|antigravity|kiro] [--dry-run]
+spectra status [--agent auto|all|claude|cursor|codex|open-code|hermes|gemini|antigravity|kiro]
+spectra uninstall [--agent auto|all|claude|cursor|codex|open-code|hermes|gemini|antigravity|kiro] [--dry-run]
 
 spectra init [PATH]
 spectra map <QUERY> [--path PATH] [--max-nodes 1..96] [--out DIR]
@@ -145,7 +148,9 @@ spectra serve --mcp
 
 `spectra init` is an optional eager-indexing command for diagnostics and benchmarks. It is not required during ordinary use.
 
-The installer is idempotent and ownership-aware: it updates stale Spectra registrations, preserves unrelated hooks, and refuses to overwrite or remove a foreign MCP entry named `spectra`.
+`--agent auto` is the default and configures every detected agent. `--agent all` attempts every adapter; agents that expose configuration only through their own CLI must already be installed.
+
+The installer is idempotent and ownership-aware: it updates stale Spectra registrations, preserves unrelated settings and comments, writes configuration atomically, and refuses to overwrite or remove a foreign MCP entry named `spectra`.
 
 ## MCP interface
 
@@ -176,7 +181,7 @@ args = ["serve", "--mcp"]
 The workspace is intentionally split into two small layers:
 
 - **`spectra-core`:** packed graph primitives, Rust extraction and resolution, deterministic selection and rendering, incremental indexing, and the State Machine Ledger.
-- **`spectra`:** CLI commands, stdio MCP transport, Codex installation, lifecycle-hook translation, and benchmark runners.
+- **`spectra`:** CLI commands, stdio MCP transport, multi-agent installation, Codex lifecycle-hook translation, and benchmark runners.
 
 The internal graph kernel is domain-neutral:
 
@@ -188,7 +193,7 @@ The internal graph kernel is domain-neutral:
 
 The Rust adapter extracts files, modules, imports, structs, enums, traits, implementations, functions, methods, containment, trait implementations, and high-confidence static calls. Rendering condenses cycles, layers nodes, clusters related code, routes typed edges, and emits deterministic SVG and PNG artifacts.
 
-See the [Ledger design and maintenance boundaries](docs/state-machine-ledger-prototype.md) for the state-machine contract.
+See the [Ledger design and maintenance boundaries](docs/state-machine-ledger.md) for the state-machine contract.
 
 ## Privacy and safety
 
@@ -222,20 +227,21 @@ Implemented:
 - Rust topology extraction and incremental indexing
 - query-focused deterministic PNG and SVG rendering
 - bounded MCP image and anchor responses
-- automatic Codex MCP and lifecycle-hook installation
+- automatic MCP installation for Claude Code, Cursor, Codex, OpenCode, Hermes Agent, Gemini CLI, Antigravity, and Kiro
+- automatic Codex lifecycle-hook installation
 - append-only State Machine Ledger with replay, recovery, redaction, concurrency control, and bounded projection
 - deterministic, provider-backed, and recorded-hook regression suites
 
 Not yet implemented:
 
 - non-Rust language adapters
-- integrations for coding agents other than Codex
+- non-Codex Ledger adapters without a verified lifecycle protocol and recorded-wire replay
 - complete unified-shell interception
 - packaged release binaries and automatic updater
 - Tauri observability UI
 - public graph-extension SDK
 
-The next release milestone is the [multi-agent adapter matrix](docs/agent-support.md), bringing the same low-maintenance setup to more local coding agents.
+The next v0.1 milestone is expanding the code adapter beyond Rust, followed by packaged installers that do not require a Rust toolchain.
 
 ## Contributing
 

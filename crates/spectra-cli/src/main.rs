@@ -1,3 +1,4 @@
+mod agents;
 mod hook;
 mod install;
 mod mcp;
@@ -7,7 +8,8 @@ use std::{
     process::ExitCode,
 };
 
-use clap::{Parser, Subcommand, ValueEnum};
+use agents::Agent;
+use clap::{Parser, Subcommand};
 use spectra_core::{CodeIndex, map_project};
 
 #[derive(Debug, Parser)]
@@ -25,21 +27,21 @@ struct Cli {
 enum Command {
     /// Configure Spectra for detected local coding agents.
     Install {
-        #[arg(long, value_enum, default_value_t = Agent::Codex)]
+        #[arg(long, value_enum, default_value_t = Agent::Auto)]
         agent: Agent,
         #[arg(long)]
         dry_run: bool,
     },
     /// Remove only configuration entries owned by Spectra.
     Uninstall {
-        #[arg(long, value_enum, default_value_t = Agent::Codex)]
+        #[arg(long, value_enum, default_value_t = Agent::Auto)]
         agent: Agent,
         #[arg(long)]
         dry_run: bool,
     },
     /// Show whether Spectra is configured for a local coding agent.
     Status {
-        #[arg(long, value_enum, default_value_t = Agent::Codex)]
+        #[arg(long, value_enum, default_value_t = Agent::Auto)]
         agent: Agent,
     },
     /// Internal Codex lifecycle adapter. Reads one hook event from stdin.
@@ -67,11 +69,6 @@ enum Command {
     },
 }
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum Agent {
-    Codex,
-}
-
 #[tokio::main]
 async fn main() -> ExitCode {
     match run(Cli::parse()).await {
@@ -85,15 +82,15 @@ async fn main() -> ExitCode {
 
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
-        Command::Install { agent, dry_run } => match agent {
-            Agent::Codex => println!("{}", install::install_codex(dry_run)?),
-        },
-        Command::Uninstall { agent, dry_run } => match agent {
-            Agent::Codex => println!("{}", install::uninstall_codex(dry_run)?),
-        },
-        Command::Status { agent } => match agent {
-            Agent::Codex => println!("{}", install::codex_status()?),
-        },
+        Command::Install { agent, dry_run } => {
+            print_agent_report(agents::install(agent, dry_run)?)?;
+        }
+        Command::Uninstall { agent, dry_run } => {
+            print_agent_report(agents::uninstall(agent, dry_run)?)?;
+        }
+        Command::Status { agent } => {
+            print_agent_report(agents::status(agent)?)?;
+        }
         Command::Hook => hook::run_stdin(),
         Command::Init { path } => {
             let (_, report) = CodeIndex::refresh(&path)?;
@@ -118,6 +115,17 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Serve { mcp: false } => return Err("serve currently requires --mcp".into()),
     }
     Ok(())
+}
+
+fn print_agent_report(report: agents::Report) -> Result<(), Box<dyn std::error::Error>> {
+    for message in report.messages {
+        println!("{message}");
+    }
+    if report.errors.is_empty() {
+        Ok(())
+    } else {
+        Err(report.errors.join("\n").into())
+    }
 }
 
 fn print_anchors(artifact: &spectra_core::MapArtifact) {

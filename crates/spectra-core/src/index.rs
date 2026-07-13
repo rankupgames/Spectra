@@ -1,9 +1,11 @@
 use std::{
     collections::{BTreeMap, HashMap},
     fs,
+    io::Write,
     path::{Path, PathBuf},
 };
 
+use atomic_write_file::AtomicWriteFile;
 use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
 use tree_sitter::{Node as SyntaxNode, Parser};
@@ -148,13 +150,14 @@ fn save_cache(path: &Path, cache: &IndexCache) -> Result<()> {
         .parent()
         .ok_or_else(|| Error::InvalidProject("index has no parent".into()))?;
     fs::create_dir_all(parent)?;
-    let temporary = parent.join("index-v1.json.tmp");
-    fs::write(&temporary, serde_json::to_vec(cache)?)?;
-    // Windows does not replace an existing destination with rename.
-    if cfg!(windows) && path.exists() {
-        fs::remove_file(path)?;
-    }
-    fs::rename(temporary, path)?;
+    let destination = if path.is_symlink() {
+        path.canonicalize()?
+    } else {
+        path.to_path_buf()
+    };
+    let mut file = AtomicWriteFile::open(destination)?;
+    file.write_all(&serde_json::to_vec(cache)?)?;
+    file.commit()?;
     Ok(())
 }
 
