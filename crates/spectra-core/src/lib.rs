@@ -1,5 +1,6 @@
 //! Spectra's topology extraction, selection, and rendering engine.
 
+mod adapters;
 mod error;
 pub mod graph;
 mod index;
@@ -7,6 +8,7 @@ pub mod ledger;
 mod render;
 mod select;
 
+pub use adapters::{SupportedLanguage, supported_languages};
 pub use error::{Error, Result};
 pub use index::{CodeIndex, INDEX_VERSION, IndexReport, SourceSpan};
 pub use ledger::{

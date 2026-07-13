@@ -302,10 +302,10 @@ fn extract_answer(response: &Value) -> String {
 }
 
 fn api_key(env_file: &Path) -> Result<String, Box<dyn std::error::Error>> {
-    if let Ok(key) = std::env::var("XAI_KEY") {
-        if !key.trim().is_empty() {
-            return Ok(key);
-        }
+    if let Ok(key) = std::env::var("XAI_KEY")
+        && !key.trim().is_empty()
+    {
+        return Ok(key);
     }
     for line in fs::read_to_string(env_file)?.lines() {
         let line = line.trim().strip_prefix("export ").unwrap_or(line.trim());

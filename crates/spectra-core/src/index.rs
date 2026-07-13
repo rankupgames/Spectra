@@ -12,11 +12,12 @@ use tree_sitter::{Node as SyntaxNode, Parser};
 
 use crate::{
     Error, Result,
+    adapters::{self, LanguageAdapter, Scope},
     graph::{NodeId, PackedGraph},
 };
 
-pub const INDEX_VERSION: u32 = 1;
-const INDEX_PATH: &str = ".spectra/index-v1.json";
+pub const INDEX_VERSION: u32 = 2;
+const INDEX_PATH: &str = ".spectra/index-v2.json";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceSpan {
@@ -60,9 +61,9 @@ impl Default for IndexCache {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct CachedFile {
     hash: u64,
+    language: String,
     nodes: Vec<CachedNode>,
-    calls: Vec<PendingCall>,
-    implementations: Vec<PendingImplementation>,
+    edges: Vec<PendingEdge>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -77,16 +78,11 @@ struct CachedNode {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct PendingCall {
+struct PendingEdge {
     source: u32,
-    name: String,
+    target_name: String,
+    kind: String,
     line: u32,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct PendingImplementation {
-    source: u32,
-    trait_name: String,
 }
 
 impl CodeIndex {
@@ -107,19 +103,20 @@ impl CodeIndex {
             cache = IndexCache::default();
         }
 
-        let files = rust_files(&project)?;
+        let files = source_files(&project)?;
         let mut live = BTreeMap::new();
         let mut changed = 0;
         for path in files {
+            let adapter = adapters::for_path(&path).expect("source file has an adapter");
             let relative = normalize_path(path.strip_prefix(&project).unwrap_or(&path));
             let source = fs::read_to_string(&path)?;
             let hash = stable_hash(source.as_bytes());
             let cached = cache.files.remove(&relative);
             let entry = match cached {
-                Some(entry) if entry.hash == hash => entry,
+                Some(entry) if entry.hash == hash && entry.language == adapter.id() => entry,
                 _ => {
                     changed += 1;
-                    parse_file(&relative, &source, hash)?
+                    parse_file(adapter, &relative, &source, hash)?
                 }
             };
             live.insert(relative, entry);
@@ -161,7 +158,7 @@ fn save_cache(path: &Path, cache: &IndexCache) -> Result<()> {
     Ok(())
 }
 
-fn rust_files(project: &Path) -> Result<Vec<PathBuf>> {
+fn source_files(project: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     for entry in WalkBuilder::new(project)
         .hidden(true)
@@ -171,10 +168,7 @@ fn rust_files(project: &Path) -> Result<Vec<PathBuf>> {
     {
         let entry = entry.map_err(|error| Error::Io(std::io::Error::other(error.to_string())))?;
         if entry.file_type().is_some_and(|kind| kind.is_file())
-            && entry
-                .path()
-                .extension()
-                .is_some_and(|extension| extension == "rs")
+            && adapters::for_path(entry.path()).is_some()
         {
             files.push(entry.into_path());
         }
@@ -183,10 +177,15 @@ fn rust_files(project: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-fn parse_file(path: &str, source: &str, hash: u64) -> Result<CachedFile> {
+fn parse_file(
+    adapter: &dyn LanguageAdapter,
+    path: &str,
+    source: &str,
+    hash: u64,
+) -> Result<CachedFile> {
     let mut parser = Parser::new();
     parser
-        .set_language(&tree_sitter_rust::LANGUAGE.into())
+        .set_language(&adapter.language(Path::new(path)))
         .map_err(|error| Error::Parse(error.to_string()))?;
     let tree = parser
         .parse(source, None)
@@ -194,9 +193,9 @@ fn parse_file(path: &str, source: &str, hash: u64) -> Result<CachedFile> {
 
     let mut file = CachedFile {
         hash,
+        language: adapter.id().into(),
         nodes: Vec::new(),
-        calls: Vec::new(),
-        implementations: Vec::new(),
+        edges: Vec::new(),
     };
     file.nodes.push(CachedNode {
         id: 0,
@@ -209,6 +208,7 @@ fn parse_file(path: &str, source: &str, hash: u64) -> Result<CachedFile> {
     });
     let mut scopes = Vec::new();
     visit(
+        adapter,
         tree.root_node(),
         source.as_bytes(),
         &mut file,
@@ -220,47 +220,34 @@ fn parse_file(path: &str, source: &str, hash: u64) -> Result<CachedFile> {
 }
 
 fn visit(
+    adapter: &dyn LanguageAdapter,
     syntax: SyntaxNode<'_>,
     source: &[u8],
     file: &mut CachedFile,
     parent: u32,
     owner: Option<u32>,
-    scopes: &mut Vec<String>,
+    scopes: &mut Vec<Scope>,
 ) {
-    let kind = syntax.kind();
-    let mapped = match kind {
-        "mod_item" => Some("module"),
-        "struct_item" => Some("struct"),
-        "enum_item" => Some("enum"),
-        "trait_item" => Some("trait"),
-        "impl_item" => Some("impl"),
-        "function_item" => Some(
-            if scopes
-                .last()
-                .is_some_and(|scope| scope.starts_with("impl ") || scope.starts_with("trait "))
-            {
-                "method"
-            } else {
-                "function"
-            },
-        ),
-        "type_item" => Some("type_alias"),
-        "const_item" => Some("constant"),
-        "static_item" => Some("static"),
-        "macro_definition" => Some("macro"),
-        "use_declaration" => Some("import"),
-        _ => None,
-    };
+    let mapped = adapter.classify(syntax, scopes);
 
     let mut next_parent = parent;
     let mut next_owner = owner;
     let mut pushed_scope = false;
-    if let Some(mapped_kind) = mapped {
-        let label = node_label(syntax, source, mapped_kind);
+    if let Some(mapped_kind) = mapped
+        && let Some(label) = adapter.label(syntax, source, mapped_kind)
+    {
         let qualified_name = if scopes.is_empty() {
             label.clone()
         } else {
-            format!("{}::{}", scopes.join("::"), label)
+            format!(
+                "{}::{}",
+                scopes
+                    .iter()
+                    .map(|scope| scope.label.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::"),
+                label
+            )
         };
         let id = file.nodes.len() as u32;
         let position = syntax.start_position();
@@ -278,78 +265,56 @@ fn visit(
         if matches!(mapped_kind, "function" | "method") {
             next_owner = Some(id);
         }
-        if matches!(
-            mapped_kind,
-            "module" | "struct" | "enum" | "trait" | "impl" | "function" | "method"
-        ) {
-            let scope = if mapped_kind == "impl" {
+        for relation in adapter.relations(syntax, source) {
+            file.edges.push(PendingEdge {
+                source: id,
+                target_name: relation.target,
+                kind: relation.kind.into(),
+                line: position.row as u32 + 1,
+            });
+        }
+        if adapter.opens_scope(mapped_kind) {
+            let scope_label = if mapped_kind == "impl" {
                 format!("impl {label}")
             } else if mapped_kind == "trait" {
                 format!("trait {label}")
             } else {
-                label.clone()
+                label
             };
-            scopes.push(scope);
+            scopes.push(Scope {
+                kind: mapped_kind,
+                label: scope_label,
+            });
             pushed_scope = true;
-        }
-        if mapped_kind == "impl" {
-            if let Some(trait_node) = syntax.child_by_field_name("trait") {
-                let trait_name = text(trait_node, source)
-                    .rsplit("::")
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .to_owned();
-                if !trait_name.is_empty() {
-                    file.implementations.push(PendingImplementation {
-                        source: id,
-                        trait_name,
-                    });
-                }
-            }
         }
     }
 
-    if kind == "call_expression" {
-        if let (Some(owner), Some(function)) = (next_owner, syntax.child_by_field_name("function"))
-        {
-            let raw = text(function, source);
-            let name = raw
-                .rsplit([':', '.'])
-                .find(|part| !part.is_empty())
-                .unwrap_or(raw)
-                .trim();
-            if is_identifier(name) {
-                file.calls.push(PendingCall {
-                    source: owner,
-                    name: name.into(),
-                    line: syntax.start_position().row as u32 + 1,
-                });
-            }
-        }
+    if let (Some(owner), Some(name)) = (next_owner, adapter.call_name(syntax, source))
+        && is_identifier(&name)
+    {
+        file.edges.push(PendingEdge {
+            source: owner,
+            target_name: name,
+            kind: "calls".into(),
+            line: syntax.start_position().row as u32 + 1,
+        });
     }
 
     let mut cursor = syntax.walk();
     for child in syntax.children(&mut cursor) {
-        visit(child, source, file, next_parent, next_owner, scopes);
+        visit(
+            adapter,
+            child,
+            source,
+            file,
+            next_parent,
+            next_owner,
+            scopes,
+        );
     }
     if pushed_scope {
         scopes.pop();
     }
-}
-
-fn node_label(node: SyntaxNode<'_>, source: &[u8], mapped_kind: &str) -> String {
-    if mapped_kind == "import" {
-        return truncate(text(node, source).trim().trim_end_matches(';'), 72);
-    }
-    if mapped_kind == "impl" {
-        if let Some(ty) = node.child_by_field_name("type") {
-            return truncate(text(ty, source).trim(), 56);
-        }
-    }
-    node.child_by_field_name("name")
-        .map(|name| text(name, source).to_owned())
-        .unwrap_or_else(|| mapped_kind.to_owned())
 }
 
 fn assemble(cache: &IndexCache) -> Result<CodeIndex> {
@@ -390,7 +355,16 @@ fn assemble(cache: &IndexCache) -> Result<CodeIndex> {
         let kind = graph.atom(node.kind);
         if matches!(
             kind,
-            "function" | "method" | "trait" | "struct" | "enum" | "module"
+            "file"
+                | "function"
+                | "method"
+                | "class"
+                | "interface"
+                | "trait"
+                | "struct"
+                | "enum"
+                | "module"
+                | "type_alias"
         ) {
             definitions
                 .entry(graph.atom(node.label).to_ascii_lowercase())
@@ -399,17 +373,30 @@ fn assemble(cache: &IndexCache) -> Result<CodeIndex> {
         }
     }
     for (path, file) in &cache.files {
-        for pending in &file.calls {
+        for pending in &file.edges {
             let source = ids[&(path.clone(), pending.source)];
             match definitions
-                .get(&pending.name.to_ascii_lowercase())
+                .get(&pending.target_name.to_ascii_lowercase())
                 .map(Vec::as_slice)
             {
                 Some([target]) => {
-                    graph.add_edge(source, *target, "calls")?;
+                    let kind = if pending.kind == "inherits" {
+                        let source_kind = graph.kind(source);
+                        let target_kind = graph.kind(*target);
+                        if source_kind == "interface" {
+                            "extends"
+                        } else if matches!(target_kind, "interface" | "trait") {
+                            "implements"
+                        } else {
+                            "extends"
+                        }
+                    } else {
+                        &pending.kind
+                    };
+                    graph.add_edge(source, *target, kind)?;
                 }
                 Some(candidates) if !candidates.is_empty() => {
-                    let boundary = graph.add_node("boundary", &format!("?{}", pending.name));
+                    let boundary = graph.add_node("boundary", &format!("?{}", pending.target_name));
                     spans.insert(
                         boundary,
                         SourceSpan {
@@ -418,18 +405,10 @@ fn assemble(cache: &IndexCache) -> Result<CodeIndex> {
                             end_line: pending.line,
                         },
                     );
-                    qualified_names.insert(boundary, pending.name.clone());
-                    graph.add_edge(source, boundary, "uncertain_call")?;
+                    qualified_names.insert(boundary, pending.target_name.clone());
+                    graph.add_edge(source, boundary, &format!("uncertain_{}", pending.kind))?;
                 }
                 _ => {}
-            }
-        }
-        for pending in &file.implementations {
-            if let Some([target]) = definitions
-                .get(&pending.trait_name.to_ascii_lowercase())
-                .map(Vec::as_slice)
-            {
-                graph.add_edge(ids[&(path.clone(), pending.source)], *target, "implements")?;
             }
         }
     }
@@ -451,18 +430,11 @@ fn stable_hash(bytes: &[u8]) -> u64 {
 fn normalize_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
-fn text<'a>(node: SyntaxNode<'_>, source: &'a [u8]) -> &'a str {
-    std::str::from_utf8(&source[node.byte_range()]).unwrap_or("")
-}
 fn is_identifier(value: &str) -> bool {
-    !value.is_empty() && value.chars().all(|ch| ch == '_' || ch.is_alphanumeric())
-}
-fn truncate(value: &str, max: usize) -> String {
-    if value.chars().count() <= max {
-        value.into()
-    } else {
-        format!("{}…", value.chars().take(max - 1).collect::<String>())
-    }
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| matches!(ch, '_' | '$') || ch.is_alphanumeric())
 }
 
 #[cfg(test)]
@@ -470,20 +442,175 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    fn parsed(path: &str, source: &str) -> CachedFile {
+        let adapter = adapters::for_path(Path::new(path)).expect("test adapter");
+        parse_file(adapter, path, source, 1).unwrap()
+    }
+
+    fn has_node(file: &CachedFile, kind: &str, label: &str) -> bool {
+        file.nodes
+            .iter()
+            .any(|node| node.kind == kind && node.label == label)
+    }
+
+    fn has_edge(file: &CachedFile, kind: &str, target: &str) -> bool {
+        file.edges
+            .iter()
+            .any(|edge| edge.kind == kind && edge.target_name == target)
+    }
+
     #[test]
     fn extracts_rust_structure_and_calls() {
-        let file = parse_file("src/lib.rs", "trait Run { fn run(&self); } struct App; impl Run for App { fn run(&self) { helper(); } } fn helper() {}", 1).unwrap();
-        assert!(
-            file.nodes
-                .iter()
-                .any(|node| node.kind == "trait" && node.label == "Run")
+        let file = parsed(
+            "src/lib.rs",
+            "trait Run { fn run(&self); } struct App; impl Run for App { fn run(&self) { helper(); } } fn helper() {}",
         );
-        assert!(
-            file.nodes
-                .iter()
-                .any(|node| node.kind == "method" && node.label == "run")
+        assert!(has_node(&file, "trait", "Run"));
+        assert!(has_node(&file, "method", "run"));
+        assert!(has_edge(&file, "implements", "Run"));
+        assert!(has_edge(&file, "calls", "helper"));
+    }
+
+    #[test]
+    fn extracts_python_structure_inheritance_and_calls() {
+        let file = parsed(
+            "app.py",
+            "from helpers import helper\nclass Base: pass\nclass App(Base):\n    def run(self): helper()\ndef helper(): pass\n",
         );
-        assert_eq!(file.calls[0].name, "helper");
+        assert!(has_node(&file, "class", "App"));
+        assert!(has_node(&file, "method", "run"));
+        assert!(has_edge(&file, "extends", "Base"));
+        assert!(has_edge(&file, "imports", "helper"));
+        assert!(has_edge(&file, "calls", "helper"));
+    }
+
+    #[test]
+    fn extracts_javascript_named_and_arrow_functions() {
+        let file = parsed(
+            "app.js",
+            "import { helper } from './helpers.js';\nclass Base {}\nclass App extends Base { run() { helper(); } }\nconst helper = () => {};\n",
+        );
+        assert!(has_node(&file, "class", "App"));
+        assert!(has_node(&file, "method", "run"));
+        assert!(has_node(&file, "function", "helper"));
+        assert!(has_edge(&file, "extends", "Base"));
+        assert!(has_edge(&file, "imports", "helper"));
+        assert!(has_edge(&file, "calls", "helper"));
+    }
+
+    #[test]
+    fn extracts_typescript_interfaces_and_calls() {
+        let file = parsed(
+            "app.ts",
+            "interface Run { run(): void }\nclass App implements Run { run() { helper(); } }\nfunction helper() {}\n",
+        );
+        assert!(has_node(&file, "interface", "Run"));
+        assert!(has_node(&file, "class", "App"));
+        assert!(has_node(&file, "method", "run"));
+        assert!(has_edge(&file, "implements", "Run"));
+        assert!(has_edge(&file, "calls", "helper"));
+    }
+
+    #[test]
+    fn extracts_go_types_methods_and_calls() {
+        let file = parsed(
+            "app.go",
+            "package app\ntype App struct{}\nfunc (App) Run() { helper() }\nfunc helper() {}\n",
+        );
+        assert!(has_node(&file, "struct", "App"));
+        assert!(has_node(&file, "method", "Run"));
+        assert!(has_edge(&file, "calls", "helper"));
+    }
+
+    #[test]
+    fn extracts_java_types_implementations_and_calls() {
+        let file = parsed(
+            "App.java",
+            "interface Run { void run(); } class App implements Run { public void run() { helper(); } static void helper() {} }",
+        );
+        assert!(has_node(&file, "interface", "Run"));
+        assert!(has_node(&file, "class", "App"));
+        assert!(has_node(&file, "method", "run"));
+        assert!(has_edge(&file, "implements", "Run"));
+        assert!(has_edge(&file, "calls", "helper"));
+    }
+
+    #[test]
+    fn extracts_c_types_includes_and_calls() {
+        let file = parsed(
+            "app.c",
+            "#include \"helper.h\"\nstruct App { int value; };\nvoid run(void) { helper(); }\nvoid helper(void) {}\n",
+        );
+        assert!(has_node(&file, "struct", "App"));
+        assert!(has_node(&file, "function", "run"));
+        assert!(has_edge(&file, "imports", "helper.h"));
+        assert!(has_edge(&file, "calls", "helper"));
+    }
+
+    #[test]
+    fn extracts_cpp_classes_inheritance_methods_and_calls() {
+        let file = parsed(
+            "app.cpp",
+            "class Base {}; class App : public Base { public: void run() { helper(); } }; void helper() {}",
+        );
+        assert!(has_node(&file, "class", "App"));
+        assert!(has_node(&file, "method", "run"));
+        assert!(has_edge(&file, "inherits", "Base"));
+        assert!(has_edge(&file, "calls", "helper"));
+    }
+
+    #[test]
+    fn extracts_csharp_types_inheritance_implementations_and_calls() {
+        let file = parsed(
+            "App.cs",
+            "interface IRun { void Run(); } class Base {} class App : Base, IRun { public void Run() { Helper(); } static void Helper() {} }",
+        );
+        assert!(has_node(&file, "interface", "IRun"));
+        assert!(has_node(&file, "class", "App"));
+        assert!(has_node(&file, "method", "Run"));
+        assert!(has_edge(&file, "inherits", "Base"));
+        assert!(has_edge(&file, "inherits", "IRun"));
+        assert!(has_edge(&file, "calls", "Helper"));
+    }
+
+    #[test]
+    fn extracts_php_types_implementations_and_calls() {
+        let file = parsed(
+            "app.php",
+            "<?php interface Run { public function run(); } class App implements Run { public function run() { helper(); } } function helper() {}",
+        );
+        assert!(has_node(&file, "interface", "Run"));
+        assert!(has_node(&file, "class", "App"));
+        assert!(has_node(&file, "method", "run"));
+        assert!(has_edge(&file, "inherits", "Run"));
+        assert!(has_edge(&file, "calls", "helper"));
+    }
+
+    #[test]
+    fn extracts_ruby_modules_inheritance_requires_and_calls() {
+        let file = parsed(
+            "app.rb",
+            "require_relative 'helper'\nmodule Core; end\nclass Base; end\nclass App < Base\n  def run\n    helper()\n  end\nend\ndef helper; end\n",
+        );
+        assert!(has_node(&file, "module", "Core"));
+        assert!(has_node(&file, "class", "App"));
+        assert!(has_node(&file, "method", "run"));
+        assert!(has_edge(&file, "inherits", "Base"));
+        assert!(has_edge(&file, "imports", "helper.rb"));
+        assert!(has_edge(&file, "calls", "helper"));
+    }
+
+    #[test]
+    fn language_registry_is_the_discovery_contract() {
+        let supported = adapters::supported_languages();
+        assert_eq!(supported.len(), 11);
+        for path in [
+            "lib.rs", "app.tsx", "app.jsx", "app.py", "app.go", "App.java", "app.c", "app.cpp",
+            "App.cs", "app.php", "app.rb",
+        ] {
+            assert!(adapters::for_path(Path::new(path)).is_some(), "{path}");
+        }
+        assert!(adapters::for_path(Path::new("README.md")).is_none());
     }
 
     #[test]
@@ -515,6 +642,112 @@ mod tests {
         fs::remove_file(source).unwrap();
         let (_, removed) = CodeIndex::refresh(&root).unwrap();
         assert_eq!(removed.removed, 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refresh_resolves_edges_across_language_files() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "spectra-polyglot-index-test-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("app.py"),
+            "from helpers import helper\ndef run(): helper()\n",
+        )
+        .unwrap();
+        fs::write(root.join("helpers.py"), "def helper(): pass\n").unwrap();
+        fs::write(root.join("ignored.txt"), "def not_source(): pass\n").unwrap();
+
+        let (index, report) = CodeIndex::refresh(&root).unwrap();
+        assert_eq!(report.files, 2);
+        let run = index
+            .graph
+            .nodes
+            .iter()
+            .find(|node| index.graph.atom(node.label) == "run")
+            .unwrap()
+            .id;
+        let helper = index
+            .graph
+            .nodes
+            .iter()
+            .find(|node| index.graph.atom(node.label) == "helper")
+            .unwrap()
+            .id;
+        assert!(index.graph.edges.iter().any(|edge| {
+            edge.source == run && edge.target == helper && index.graph.atom(edge.kind) == "calls"
+        }));
+        assert!(
+            index
+                .graph
+                .edges
+                .iter()
+                .any(|edge| { edge.target == helper && index.graph.atom(edge.kind) == "imports" })
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refresh_resolves_header_imports_and_infers_inheritance_kinds() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "spectra-semantic-edge-test-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("helper.h"), "void helper(void);\n").unwrap();
+        fs::write(
+            root.join("app.c"),
+            "#include \"helper.h\"\nvoid run(void) { helper(); }\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("App.cs"),
+            "interface IRun { void Run(); } class Base {} class App : Base, IRun { public void Run() {} }",
+        )
+        .unwrap();
+
+        let (index, report) = CodeIndex::refresh(&root).unwrap();
+        assert_eq!(report.files, 3);
+        let find = |kind: &str, label: &str| {
+            index
+                .graph
+                .nodes
+                .iter()
+                .find(|node| {
+                    index.graph.kind(node.id) == kind && index.graph.atom(node.label) == label
+                })
+                .unwrap()
+                .id
+        };
+        let app = find("class", "App");
+        let base = find("class", "Base");
+        let interface = find("interface", "IRun");
+        let header = find("file", "helper.h");
+        assert!(index.graph.edges.iter().any(|edge| {
+            edge.source == app && edge.target == base && index.graph.atom(edge.kind) == "extends"
+        }));
+        assert!(index.graph.edges.iter().any(|edge| {
+            edge.source == app
+                && edge.target == interface
+                && index.graph.atom(edge.kind) == "implements"
+        }));
+        assert!(
+            index
+                .graph
+                .edges
+                .iter()
+                .any(|edge| { edge.target == header && index.graph.atom(edge.kind) == "imports" })
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

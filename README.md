@@ -11,14 +11,14 @@ AI coding agents are good at working with code. They are less good at rememberin
 Spectra is an experiment in fixing that. It gives an agent two things: a visual map of the codebase and a small, durable record of what has already happened. The goal is simple: spend fewer tokens rediscovering context, and more of them doing the actual work.
 
 ```text
-Rust repository ──tree-sitter──▶ topology graph ──▶ PNG map + exact anchors
+Polyglot repository ──code adapters──▶ topology graph ──▶ PNG map + exact anchors
 Agent lifecycle ──adapter hooks──▶ immutable ledger ──▶ bounded state context
 ```
 
 Instead of dumping source up front, Spectra lets the model see the shape of the system, choose an exact `path:start-end` anchor, and read code once it knows what it is looking for.
 
 > [!IMPORTANT]
-> Spectra is an early prototype. The current code adapter supports Rust, and automatic topology setup supports eight local agents. Lifecycle Ledger integration is currently limited to Codex. See [Project status](#project-status) before relying on it in production.
+> Spectra is an early prototype. The v0.2 adapter registry currently supports Rust, TypeScript/TSX, JavaScript/JSX, Python, Go, Java, C, C++, C#, PHP, and Ruby; CodeGraph language parity is still in progress. Automatic topology setup supports eight local agents, while Lifecycle Ledger integration is currently limited to Codex. See [Project status](#project-status) before relying on it in production.
 
 The [agent support contract](docs/agent-support.md) tracks topology and Ledger support separately so an MCP integration is never mistaken for lifecycle coverage.
 
@@ -29,7 +29,7 @@ Most code-context tools answer with source and explanation together. That can be
 - **See the system first.** Spectra turns the relevant part of the architecture into a deterministic 1536×1024 map.
 - **Read with a purpose.** Every visual ID points back to an exact file and line range.
 - **Keep the answer small.** Maps show 48 nodes by default and never more than 96.
-- **Stay current.** Changed, added, and deleted Rust files are refreshed before a map is returned.
+- **Stay current.** Changed, added, and deleted supported source files are refreshed before a map is returned.
 - **Remember outcomes, not noise.** The Ledger keeps edits, test results, and blockers without saving full conversations or terminal output.
 - **Keep it local.** Parsing, indexing, rendering, selection, and replay all happen on your machine.
 
@@ -53,7 +53,7 @@ Spectra does not have packaged binaries yet, but Cargo can install the current r
 
 - Rust 1.88 or newer
 - At least one supported local agent: Claude Code, Cursor, Codex, OpenCode, Hermes Agent, Gemini CLI, Antigravity, or Kiro
-- A Rust repository to map
+- A repository containing at least one supported source language
 
 Any MCP client can also run `spectra serve --mcp` manually.
 
@@ -107,7 +107,7 @@ Spectra returns a PNG and compact metadata:
 ```text
 N1=src/router.rs:18-47
 N2=src/store.rs:9-31
-nodes=42 truncated=false index=v1
+nodes=42 truncated=false index=v2
 ```
 
 From there, the agent can pick an anchor and open the part of the source that actually matters.
@@ -118,7 +118,7 @@ Normal use creates a project-local `.spectra/` directory containing generated st
 
 ```text
 .spectra/
-├── index-v1.json          incremental code index
+├── index-v2.json          incremental polyglot code index
 ├── ledger-v1.jsonl        append-only context ledger
 └── artifacts/             generated PNG and SVG maps
 ```
@@ -126,7 +126,7 @@ Normal use creates a project-local `.spectra/` directory containing generated st
 Whenever an agent asks for a map, Spectra:
 
 1. Traverses the repository while respecting `.gitignore`.
-2. Reuses unchanged file fragments and reparses changed Rust files.
+2. Detects each supported file through the adapter registry, reuses unchanged fragments, and reparses changed files with the matching grammar.
 3. Resolves high-confidence structure and relationships.
 4. Marks uncertain calls as dashed boundaries instead of presenting guesses as facts.
 5. Selects and renders a query-focused subgraph.
@@ -180,7 +180,7 @@ args = ["serve", "--mcp"]
 
 The workspace is intentionally split into two small layers:
 
-- **`spectra-core`:** packed graph primitives, Rust extraction and resolution, deterministic selection and rendering, incremental indexing, and the State Machine Ledger.
+- **`spectra-core`:** packed graph primitives, language-adapter extraction and resolution, deterministic selection and rendering, incremental indexing, and the State Machine Ledger.
 - **`spectra`:** CLI commands, stdio MCP transport, multi-agent installation, Codex lifecycle-hook translation, and benchmark runners.
 
 The internal graph kernel is domain-neutral:
@@ -191,7 +191,9 @@ The internal graph kernel is domain-neutral:
 - adjacency indexes and invariant validation
 - code-specific `SourceSpan` data kept in a separate sidecar
 
-The Rust adapter extracts files, modules, imports, structs, enums, traits, implementations, functions, methods, containment, trait implementations, and high-confidence static calls. Rendering condenses cycles, layers nodes, clusters related code, routes typed edges, and emits deterministic SVG and PNG artifacts.
+Every adapter maps its grammar into the same graph vocabulary. The current v0.2 packs cover Rust, TypeScript/TSX, JavaScript/JSX, Python, Go, Java, C, C++, C#, PHP, and Ruby, including structural symbols, containment, imports, calls, inheritance, and implementations where the language exposes them. Ambiguous targets remain explicit uncertain boundaries. Rendering condenses cycles, layers nodes, clusters related code, routes typed edges, and emits deterministic SVG and PNG artifacts.
+
+The adapter contract, functional acceptance bar, and CodeGraph parity matrix are tracked in [Code adapters](docs/code-adapters.md).
 
 See the [Ledger design and maintenance boundaries](docs/state-machine-ledger.md) for the state-machine contract.
 
@@ -224,7 +226,7 @@ The benchmark protocol, frozen prompts, raw evaluation data, and replay fixtures
 
 Implemented:
 
-- Rust topology extraction and incremental indexing
+- adapter-driven topology extraction and incremental indexing for Rust, TypeScript/TSX, JavaScript/JSX, Python, Go, Java, C, C++, C#, PHP, and Ruby
 - query-focused deterministic PNG and SVG rendering
 - bounded MCP image and anchor responses
 - automatic MCP installation for Claude Code, Cursor, Codex, OpenCode, Hermes Agent, Gemini CLI, Antigravity, and Kiro
@@ -234,14 +236,15 @@ Implemented:
 
 Not yet implemented:
 
-- non-Rust language adapters
+- remaining CodeGraph-parity language adapters
+- framework routing and cross-language bridges beyond the common semantic resolver
 - non-Codex Ledger adapters without a verified lifecycle protocol and recorded-wire replay
 - complete unified-shell interception
 - packaged release binaries and automatic updater
 - Tauri observability UI
 - public graph-extension SDK
 
-The next v0.1 milestone is expanding the code adapter beyond Rust, followed by packaged installers that do not require a Rust toolchain.
+The v0.2 milestone is functional CodeGraph language parity: adapters, ecosystem routing, cross-language bridges, and measured real-repository coverage. Packaged installers that do not require a Rust toolchain follow that work.
 
 ## Contributing
 

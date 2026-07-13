@@ -95,7 +95,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Init { path } => {
             let (_, report) = CodeIndex::refresh(&path)?;
             println!(
-                "Indexed {} Rust files ({} changed, {} removed): {} nodes, {} edges",
+                "Indexed {} source files ({} changed, {} removed): {} nodes, {} edges",
                 report.files, report.changed, report.removed, report.nodes, report.edges
             );
         }
