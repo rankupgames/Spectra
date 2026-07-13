@@ -4,8 +4,8 @@ use tree_sitter::{Language, Node as SyntaxNode};
 
 use super::{
     FileSymbol, LanguageAdapter, Relation, Scope, call_target, field_text, frameworks,
-    identifier_names, inside_type, javascript::variable_function_name, named_child_by_kind, text,
-    truncate,
+    identifier_names, inside_type, javascript::variable_function_name, named_child_by_kind,
+    terminal_identifier, text, truncate,
 };
 
 pub(crate) struct TypeScriptAdapter;
@@ -65,9 +65,30 @@ impl LanguageAdapter for TypeScriptAdapter {
     }
 
     fn call_name(&self, node: SyntaxNode<'_>, source: &[u8]) -> Option<String> {
-        (node.kind() == "call_expression")
-            .then(|| call_target(node, "function", source))
-            .flatten()
+        if node.kind() == "call_expression" {
+            return call_target(node, "function", source);
+        }
+        if matches!(
+            node.kind(),
+            "jsx_opening_element" | "jsx_self_closing_element"
+        ) {
+            return node
+                .child_by_field_name("name")
+                .and_then(|name| terminal_identifier(name, source))
+                .filter(|name| name.chars().next().is_some_and(char::is_uppercase));
+        }
+        None
+    }
+
+    fn call_kind(&self, node: SyntaxNode<'_>) -> &'static str {
+        if matches!(
+            node.kind(),
+            "jsx_opening_element" | "jsx_self_closing_element"
+        ) {
+            "renders"
+        } else {
+            "calls"
+        }
     }
 
     fn relations(&self, node: SyntaxNode<'_>, source: &[u8]) -> Vec<Relation> {
@@ -108,7 +129,10 @@ impl LanguageAdapter for TypeScriptAdapter {
             .collect()
     }
 
-    fn file_symbols(&self, _path: &Path, source: &str) -> Vec<FileSymbol> {
-        frameworks::javascript_routes(source)
+    fn file_symbols(&self, path: &Path, source: &str) -> Vec<FileSymbol> {
+        let mut symbols = frameworks::javascript_routes(source);
+        symbols.extend(frameworks::react_routes(path, source));
+        symbols.extend(frameworks::fabric_typescript_components(source));
+        symbols
     }
 }

@@ -18,7 +18,7 @@ Agent lifecycle ──adapter hooks──▶ immutable ledger ──▶ bounded 
 Instead of dumping source up front, Spectra lets the model see the shape of the system, choose an exact `path:start-end` anchor, and read code once it knows what it is looking for.
 
 > [!IMPORTANT]
-> Spectra is an early prototype. The v0.2 registry now covers the complete CodeGraph v1.3.0 language and extension surface with 39 adapters; framework-resolver and cross-language bridge parity is still in progress. Automatic topology setup supports eight local agents, while Lifecycle Ledger integration is currently limited to Codex. See [Project status](#project-status) before relying on it in production.
+> Spectra is an early prototype. The v0.2 registry covers the complete CodeGraph v1.3.0 language and extension surface with 39 adapters, and the matching framework/bridge packs are implemented; representative-repository parity validation is still in progress. Automatic topology setup supports eight local agents, while Lifecycle Ledger integration is currently limited to Codex. See [Project status](#project-status) before relying on it in production.
 
 The [agent support contract](docs/agent-support.md) tracks topology and Ledger support separately so an MCP integration is never mistaken for lifecycle coverage.
 
@@ -256,6 +256,7 @@ The benchmark protocol, frozen prompts, raw evaluation data, and replay fixtures
 Implemented:
 
 - adapter-driven topology extraction and incremental indexing across all 39 CodeGraph v1.3.0 language families and dialect adapters
+- CodeGraph-parity server framework routes plus React/Next, SwiftUI, React Native, Expo Module, and Fabric client/native bridges
 - embedded JavaScript/TypeScript bridges, component rendering and event bindings, and conventional SvelteKit, Nuxt, and Astro page routes
 - query-focused deterministic PNG and SVG rendering
 - bounded MCP image and anchor responses
@@ -267,7 +268,7 @@ Implemented:
 
 Not yet implemented:
 
-- remaining CodeGraph-parity client/native framework bridges beyond the implemented server routing, web, native, configuration, infrastructure, and legacy packs
+- measured representative-repository evaluation and any adapter gaps it exposes
 - non-Codex Ledger adapters without a verified lifecycle protocol and recorded-wire replay
 - complete unified-shell interception
 - packaged release binaries and automatic updater

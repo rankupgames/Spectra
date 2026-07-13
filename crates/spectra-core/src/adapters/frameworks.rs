@@ -520,6 +520,190 @@ pub(crate) fn play_routes(path: &std::path::Path, source: &str) -> Vec<FileSymbo
         .collect()
 }
 
+pub(crate) fn react_routes(path: &std::path::Path, source: &str) -> Vec<FileSymbol> {
+    let mut symbols = Vec::new();
+    let mut cursor = 0;
+    while let Some(relative) = source[cursor..].find("<Route") {
+        let start = cursor + relative;
+        let end = (start + 400).min(source.len());
+        let window = &source[start..end];
+        if let Some(route) = jsx_attribute(window, "path") {
+            let component = jsx_component_attribute(window);
+            symbols.push(file_symbol(
+                "route",
+                route,
+                line_of(source, start),
+                component
+                    .map(|component| vec![relation("routes_to", component)])
+                    .unwrap_or_default(),
+            ));
+        }
+        cursor = start + "<Route".len();
+    }
+
+    if [
+        "createBrowserRouter",
+        "createHashRouter",
+        "createMemoryRouter",
+        "createRoutesFromElements",
+    ]
+    .iter()
+    .any(|marker| source.contains(marker))
+    {
+        let mut cursor = 0;
+        while let Some(relative) = source[cursor..].find("path:") {
+            let start = cursor + relative;
+            let end = (start + 300).min(source.len());
+            let window = &source[start..end];
+            if let (Some(route), Some(component)) =
+                (first_quoted(window), object_component_attribute(window))
+            {
+                symbols.push(file_symbol(
+                    "route",
+                    normalized_route(&route),
+                    line_of(source, start),
+                    vec![relation("routes_to", component)],
+                ));
+            }
+            cursor = start + "path:".len();
+        }
+    }
+
+    if source.contains("export default")
+        && let Some(route) = next_route_from_path(path)
+    {
+        let offset = source.find("export default").unwrap_or(0);
+        let relations = default_export_name(&source[offset..])
+            .map(|component| vec![relation("routes_to", component)])
+            .unwrap_or_default();
+        symbols.push(file_symbol(
+            "route",
+            route,
+            line_of(source, offset),
+            relations,
+        ));
+    }
+    symbols
+}
+
+pub(crate) fn fabric_typescript_components(source: &str) -> Vec<FileSymbol> {
+    source
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            line.contains("codegenNativeComponent")
+                .then(|| first_quoted(line))
+                .flatten()
+                .map(|name| file_symbol("component", name, index + 1, Vec::new()))
+        })
+        .collect()
+}
+
+pub(crate) fn objective_c_bridge_symbols(source: &str) -> Vec<FileSymbol> {
+    let mut symbols = Vec::new();
+    if source.contains("RCT_EXPORT_MODULE") {
+        for call in balanced_calls(source, "RCT_EXPORT_METHOD(") {
+            if let Some(name) = selector_keyword(call.body) {
+                symbols.push(file_symbol("method", name, call.line, Vec::new()));
+            }
+        }
+        for call in balanced_calls(source, "RCT_REMAP_METHOD(") {
+            if let Some(name) = split_args(call.body)
+                .first()
+                .and_then(|name| handler_name(name))
+            {
+                symbols.push(file_symbol("method", name, call.line, Vec::new()));
+            }
+        }
+    }
+    if let Some(class) = source.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("@implementation ")
+            .and_then(|rest| rest.split_whitespace().next())
+            .filter(|name| name.ends_with("Manager") || name.ends_with("ViewManager"))
+    }) {
+        symbols.push(file_symbol(
+            "component",
+            native_component_name(class),
+            source
+                .lines()
+                .position(|line| line.contains("@implementation"))
+                .unwrap_or(0)
+                + 1,
+            Vec::new(),
+        ));
+    }
+    symbols
+}
+
+pub(crate) fn swift_client_symbols(source: &str) -> Vec<FileSymbol> {
+    let mut symbols = Vec::new();
+    for (index, line) in source.lines().enumerate() {
+        let words = line
+            .split(|character: char| !is_identifier_character(character))
+            .filter(|word| !word.is_empty())
+            .collect::<Vec<_>>();
+        if words.first() == Some(&"struct")
+            && words.get(2) == Some(&"View")
+            && let Some(name) = words.get(1)
+        {
+            symbols.push(file_symbol("component", *name, index + 1, Vec::new()));
+        }
+    }
+    symbols.extend(expo_module_symbols(source));
+    symbols
+}
+
+pub(crate) fn jvm_client_symbols(source: &str) -> Vec<FileSymbol> {
+    let mut symbols = expo_module_symbols(source);
+    if source.contains("ViewManager")
+        && let Some((line, class)) = source
+            .lines()
+            .enumerate()
+            .find_map(|(index, line)| class_name(line).map(|class| (index + 1, class)))
+        && (class.ends_with("Manager") || class.ends_with("ViewManager"))
+    {
+        symbols.push(file_symbol(
+            "component",
+            native_component_name(&class),
+            line,
+            Vec::new(),
+        ));
+    }
+    symbols
+}
+
+fn expo_module_symbols(source: &str) -> Vec<FileSymbol> {
+    if !(source.contains(": Module") || source.contains("extends Module")) {
+        return Vec::new();
+    }
+    let module = balanced_calls(source, "Name(")
+        .into_iter()
+        .find_map(|call| first_quoted(call.body))
+        .or_else(|| source.lines().find_map(class_name))
+        .unwrap_or_else(|| "ExpoModule".to_owned());
+    let mut symbols = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for (index, line) in source.lines().enumerate() {
+        for kind in ["Function", "AsyncFunction", "Property", "Constants"] {
+            let Some(offset) = line.find(kind) else {
+                continue;
+            };
+            if let Some(name) = first_quoted(&line[offset + kind.len()..])
+                && seen.insert(name.clone())
+            {
+                symbols.push(file_symbol(
+                    "method",
+                    name.clone(),
+                    index + 1,
+                    vec![relation("exports", format!("{module}::{name}"))],
+                ));
+            }
+        }
+    }
+    symbols
+}
+
 struct BalancedCall<'a> {
     body: &'a str,
     line: usize,
@@ -758,6 +942,109 @@ fn tagged_value(line: &str, key: &str) -> Option<String> {
     Some(line[start..end].to_owned())
 }
 
+fn jsx_attribute(window: &str, attribute: &str) -> Option<String> {
+    let marker = format!("{attribute}=");
+    let compact = window.replace([' ', '\n', '\r', '\t'], "");
+    let start = compact.find(&marker)? + marker.len();
+    first_quoted(&compact[start..])
+}
+
+fn jsx_component_attribute(window: &str) -> Option<String> {
+    for marker in ["component={", "element={<"] {
+        let compact = window.replace([' ', '\n', '\r', '\t'], "");
+        if let Some(start) = compact.find(marker) {
+            return leading_name(&compact[start + marker.len()..]);
+        }
+    }
+    None
+}
+
+fn object_component_attribute(window: &str) -> Option<String> {
+    let compact = window.replace([' ', '\n', '\r', '\t'], "");
+    for marker in ["element:<", "Component:"] {
+        if let Some(start) = compact.find(marker) {
+            return leading_name(&compact[start + marker.len()..]);
+        }
+    }
+    None
+}
+
+fn leading_name(value: &str) -> Option<String> {
+    let name = value
+        .chars()
+        .take_while(|character| is_identifier_character(*character))
+        .collect::<String>();
+    name.chars()
+        .next()
+        .is_some_and(char::is_uppercase)
+        .then_some(name)
+}
+
+fn default_export_name(source: &str) -> Option<String> {
+    let rest = source.strip_prefix("export default")?.trim_start();
+    let rest = rest
+        .strip_prefix("async ")
+        .unwrap_or(rest)
+        .strip_prefix("function ")
+        .unwrap_or(rest);
+    leading_name(rest)
+}
+
+fn next_route_from_path(path: &std::path::Path) -> Option<String> {
+    let parts = path
+        .iter()
+        .filter_map(|part| part.to_str())
+        .collect::<Vec<_>>();
+    let root = parts
+        .iter()
+        .position(|part| matches!(*part, "pages" | "app"))?;
+    let mut route = Vec::new();
+    for part in &parts[root + 1..] {
+        let stem = part.split('.').next().unwrap_or(part);
+        if matches!(stem, "index" | "page" | "layout")
+            || stem.starts_with('(') && stem.ends_with(')')
+        {
+            continue;
+        }
+        let segment = if stem.starts_with("[...") && stem.ends_with(']') {
+            format!("*{}", &stem[4..stem.len() - 1])
+        } else if stem.starts_with('[') && stem.ends_with(']') {
+            format!(":{}", &stem[1..stem.len() - 1])
+        } else {
+            stem.to_owned()
+        };
+        route.push(segment);
+    }
+    Some(normalized_route(&route.join("/")))
+}
+
+fn selector_keyword(value: &str) -> Option<String> {
+    let name = value
+        .trim()
+        .chars()
+        .take_while(|character| is_identifier_character(*character))
+        .collect::<String>();
+    is_identifier(&name).then_some(name)
+}
+
+fn native_component_name(class: &str) -> String {
+    let class = class.strip_prefix("RCT").unwrap_or(class);
+    class
+        .strip_suffix("ViewManager")
+        .or_else(|| class.strip_suffix("Manager"))
+        .or_else(|| class.strip_suffix("View"))
+        .unwrap_or(class)
+        .to_owned()
+}
+
+fn line_of(source: &str, offset: usize) -> usize {
+    source[..offset.min(source.len())]
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .count()
+        + 1
+}
+
 fn terminal_class(value: &str) -> String {
     value
         .rsplit(['\\', ':'])
@@ -990,5 +1277,63 @@ mod tests {
             "GET /users/:id",
             "controllers::Users::show"
         ));
+    }
+
+    #[test]
+    fn extracts_react_and_native_client_bridges() {
+        let react = react_routes(
+            std::path::Path::new("src/App.tsx"),
+            "<Route path=\"/dashboard\" element={<Dashboard />} />",
+        );
+        assert!(has_route(&react, "/dashboard", "Dashboard"));
+        let next = react_routes(
+            std::path::Path::new("app/users/[id]/page.tsx"),
+            "export default function UserPage() {}",
+        );
+        assert!(has_route(&next, "/users/:id", "UserPage"));
+
+        let fabric = fabric_typescript_components(
+            "export default codegenNativeComponent<Props>('FancyView');",
+        );
+        assert!(
+            fabric
+                .iter()
+                .any(|symbol| symbol.kind == "component" && symbol.label == "FancyView")
+        );
+
+        let objc = objective_c_bridge_symbols(
+            "@implementation RCTCameraViewManager\nRCT_EXPORT_MODULE(Camera)\nRCT_EXPORT_METHOD(takePhoto:(id)resolve) {}\n@end",
+        );
+        assert!(
+            objc.iter()
+                .any(|symbol| symbol.kind == "method" && symbol.label == "takePhoto")
+        );
+        assert!(
+            objc.iter()
+                .any(|symbol| symbol.kind == "component" && symbol.label == "Camera")
+        );
+
+        let swift = swift_client_symbols(
+            "struct DashboardView: View {}\npublic class BatteryModule: Module { Name(\"Battery\"); AsyncFunction(\"getLevel\") {} }",
+        );
+        assert!(
+            swift
+                .iter()
+                .any(|symbol| symbol.kind == "component" && symbol.label == "DashboardView")
+        );
+        assert!(
+            swift
+                .iter()
+                .any(|symbol| symbol.kind == "method" && symbol.label == "getLevel")
+        );
+
+        let kotlin = jvm_client_symbols(
+            "class MapManager : SimpleViewManager<MapView>() { @ReactProp fun setZoom() {} }",
+        );
+        assert!(
+            kotlin
+                .iter()
+                .any(|symbol| symbol.kind == "component" && symbol.label == "Map")
+        );
     }
 }

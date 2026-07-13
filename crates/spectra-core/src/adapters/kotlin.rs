@@ -88,6 +88,8 @@ impl LanguageAdapter for KotlinAdapter {
     }
 
     fn file_symbols(&self, _path: &Path, source: &str) -> Vec<FileSymbol> {
-        frameworks::java_routes(source)
+        let mut symbols = frameworks::java_routes(source);
+        symbols.extend(frameworks::jvm_client_symbols(source));
+        symbols
     }
 }

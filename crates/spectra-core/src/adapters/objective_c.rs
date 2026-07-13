@@ -3,9 +3,10 @@ use std::path::Path;
 use tree_sitter::{Language, Node as SyntaxNode};
 
 use super::{
-    LanguageAdapter, Relation, Scope,
+    FileSymbol, LanguageAdapter, Relation, Scope,
     c_family::{c_family_call, c_family_label, include_relation},
-    field_text, identifier_names, named_child_by_kind, terminal_identifier, text, truncate,
+    field_text, frameworks, identifier_names, named_child_by_kind, terminal_identifier, text,
+    truncate,
 };
 
 pub(crate) struct ObjectiveCAdapter;
@@ -115,6 +116,10 @@ impl LanguageAdapter for ObjectiveCAdapter {
             });
         }
         relations
+    }
+
+    fn file_symbols(&self, _path: &Path, source: &str) -> Vec<FileSymbol> {
+        frameworks::objective_c_bridge_symbols(source)
     }
 }
 

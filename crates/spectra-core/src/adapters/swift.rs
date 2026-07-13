@@ -92,6 +92,8 @@ impl LanguageAdapter for SwiftAdapter {
     }
 
     fn file_symbols(&self, _path: &Path, source: &str) -> Vec<FileSymbol> {
-        frameworks::swift_routes(source)
+        let mut symbols = frameworks::swift_routes(source);
+        symbols.extend(frameworks::swift_client_symbols(source));
+        symbols
     }
 }

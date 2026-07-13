@@ -528,7 +528,7 @@ fn visit(
         file.edges.push(PendingEdge {
             source: owner,
             target_name: name,
-            kind: "calls".into(),
+            kind: adapter.call_kind(syntax).into(),
             line: syntax.start_position().row as u32 + 1 + context.line_offset,
         });
     }
@@ -698,7 +698,7 @@ fn definition_matches(graph: &PackedGraph, target: NodeId, edge_kind: &str) -> b
         ),
         "calls" => matches!(kind, "function" | "method" | "kernel" | "class"),
         "binds" => matches!(kind, "function" | "method" | "kernel"),
-        "renders" => kind == "component",
+        "renders" => matches!(kind, "component" | "function" | "class"),
         _ => true,
     }
 }
@@ -802,6 +802,17 @@ mod tests {
     }
 
     #[test]
+    fn extracts_react_routes_components_and_render_edges() {
+        let file = parsed(
+            "src/App.tsx",
+            "function Dashboard() { return <main />; }\nfunction App() { return <Dashboard />; }\nconst routes = createBrowserRouter([{ path: '/dashboard', Component: Dashboard }]);",
+        );
+        assert!(has_node(&file, "route", "/dashboard"));
+        assert!(has_edge(&file, "routes_to", "Dashboard"));
+        assert!(has_edge(&file, "renders", "Dashboard"));
+    }
+
+    #[test]
     fn refresh_resolves_framework_routes_to_qualified_handlers() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -839,6 +850,49 @@ mod tests {
             .map(|edge| index.graph.label(edge.target))
             .collect::<Vec<_>>();
         assert_eq!(handlers, ["show"]);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refresh_resolves_react_native_calls_to_exported_methods() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "spectra-react-native-test-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(root.join("ios")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(
+            root.join("ios/Camera.m"),
+            "@implementation RCTCamera\nRCT_EXPORT_MODULE(Camera)\nRCT_EXPORT_METHOD(takePhoto:(id)resolve) {}\n@end",
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/camera.ts"),
+            "export function capture() { NativeModules.Camera.takePhoto(); }",
+        )
+        .unwrap();
+
+        let (index, _) = CodeIndex::refresh(&root).unwrap();
+        let capture = index
+            .graph
+            .nodes
+            .iter()
+            .find(|node| index.graph.label(node.id) == "capture")
+            .unwrap()
+            .id;
+        let targets = index
+            .graph
+            .edges
+            .iter()
+            .filter(|edge| edge.source == capture && index.graph.atom(edge.kind) == "calls")
+            .map(|edge| index.graph.label(edge.target))
+            .collect::<Vec<_>>();
+        assert_eq!(targets, ["takePhoto"]);
 
         fs::remove_dir_all(root).unwrap();
     }

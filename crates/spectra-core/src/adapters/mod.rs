@@ -149,6 +149,10 @@ pub(crate) trait LanguageAdapter: Sync {
         None
     }
 
+    fn call_kind(&self, _node: SyntaxNode<'_>) -> &'static str {
+        "calls"
+    }
+
     fn relations(&self, _node: SyntaxNode<'_>, _source: &[u8]) -> Vec<Relation> {
         Vec::new()
     }

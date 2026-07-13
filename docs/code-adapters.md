@@ -21,18 +21,18 @@ Core extraction, ecosystem routing, and language bridges may land separately, bu
 | Language | Extensions | Core extraction | Semantic edges | Routing / bridges |
 | --- | --- | --- | --- | --- |
 | Rust | `.rs` | Implemented | Calls, imports, trait implementations | Rocket, Axum, and Actix route-to-handler bridges implemented |
-| TypeScript / TSX | `.ts`, `.tsx` | Implemented | Calls, imports, extends, implements | Express and NestJS route-to-handler bridges implemented; client bridges remain |
-| JavaScript / JSX | `.js`, `.jsx`, `.mjs`, `.cjs` | Implemented | Calls, imports, extends | Express and NestJS route-to-handler bridges implemented; client bridges remain |
+| TypeScript / TSX | `.ts`, `.tsx` | Implemented | Calls, imports, extends, implements | Express/NestJS and React/Next routes, JSX renders, TurboModule specs, and Fabric components implemented |
+| JavaScript / JSX | `.js`, `.jsx`, `.mjs`, `.cjs` | Implemented | Calls, imports, extends | Express/NestJS and React/Next routes, JSX renders, and React Native calls implemented |
 | Python | `.py` | Implemented | Calls, imports, inheritance | Django, DRF, Flask, and FastAPI routes implemented |
 | Go | `.go` | Implemented | Calls, package imports | Gin/Echo/Mux/Chi-style routes and GoFrame route metadata implemented |
-| Java | `.java` | Implemented | Calls, imports, extends, implements | Spring routes implemented; Play route files bridge to JVM handlers |
+| Java | `.java` | Implemented | Calls, imports, extends, implements | Spring routes, Play handlers, React Native methods, and Fabric view managers implemented |
 | C | `.c`, `.h` | Implemented | Calls, includes | Planned |
 | C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx` | Implemented | Calls, includes, inheritance | Planned |
 | C# | `.cs` | Implemented | Calls, imports, extends, implements | ASP.NET controller and minimal-API routes implemented |
 | PHP | `.php` | Implemented | Calls, imports/includes, extends, implements | Laravel explicit and resource routes implemented |
 | Ruby | `.rb` | Implemented | Calls, requires, inheritance | Rails explicit and resource routes implemented |
-| Swift | `.swift` | Implemented | Calls, imports, inheritance and protocol adoption | Vapor routes implemented; UI bridges remain |
-| Kotlin | `.kt`, `.kts` | Implemented | Calls, imports, inheritance and interface implementation | Spring routes implemented |
+| Swift | `.swift` | Implemented | Calls, imports, inheritance and protocol adoption | Vapor routes, SwiftUI components, and Expo Module exports implemented |
+| Kotlin | `.kt`, `.kts` | Implemented | Calls, imports, inheritance and interface implementation | Spring routes plus Expo Module and Fabric/React Native exports implemented |
 | Scala | `.scala`, `.sc`, Play `conf/routes` | Implemented | Calls, imports, inheritance and trait mixins | Play route-to-handler bridges implemented |
 | Dart | `.dart` | Implemented | Calls, imports, extends, implements, and mixins | Planned |
 | Lua | `.lua` | Implemented | Calls and module requires | Planned |
@@ -41,7 +41,7 @@ Core extraction, ecosystem routing, and language bridges may land separately, bu
 | Vue | `.vue` | Implemented, including embedded JS/TS | Calls, imports, component renders, event bindings | Nuxt page routes and script-setup bridges implemented |
 | Astro | `.astro` | Implemented, including frontmatter TS | Calls, imports, component renders, event bindings | Astro page routes and frontmatter bridges implemented |
 | Liquid | `.liquid` | Implemented over HTML structure | Render/include and output bindings | Template-to-snippet and output bridges implemented |
-| Objective-C | `.m`, `.mm` | Implemented | Calls, imports, inheritance, protocols, implementations, message sends | C/Objective-C header and implementation resolution implemented |
+| Objective-C | `.m`, `.mm` | Implemented | Calls, imports, inheritance, protocols, implementations, message sends | C/Objective-C resolution plus React Native exports and Fabric view managers implemented |
 | CUDA | `.cu`, `.cuh` | Implemented | Calls, includes, inheritance, kernel launches | C++-family definitions and CUDA kernels share the common resolver |
 | Metal | `.metal` | Implemented over the C++ grammar | Calls, includes, inheritance, shader entry points | C++-family definitions and Metal kernels share the common resolver |
 | R | `.r`, `.R` | Implemented | Functions, S4 classes/generics/methods | Package imports and calls implemented |
@@ -66,4 +66,4 @@ The common resolver prefers exact-case definitions compatible with the edge type
 
 The baseline is CodeGraph v1.3.0 as installed when v0.2 development began. Its complete language and extension surface is represented by the 39 adapters above. CUDA and Metal are C++ dialects in CodeGraph; Spectra uses dedicated adapters for their kernel semantics while preserving C++-family resolution. Erlang application manifests (`.app` and `.app.src`) are recognized through path-aware detection.
 
-Parity is pinned to this baseline so a moving upstream language list cannot silently change the release gate. The registry and extraction fixtures enforce that surface. Remaining v0.2 work is framework-resolver breadth, cross-language bridge coverage, and measured representative-repository evaluation; later CodeGraph additions can be adopted deliberately.
+Parity is pinned to this baseline so a moving upstream language list cannot silently change the release gate. The registry, extraction fixtures, route-resolution tests, and native-bridge tests enforce that surface. Remaining v0.2 work is measured representative-repository evaluation and closing any gaps it exposes; later CodeGraph additions can be adopted deliberately.
