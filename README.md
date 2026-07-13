@@ -165,13 +165,28 @@ The installer is idempotent and ownership-aware: it updates stale Spectra regist
 
 ## MCP interface
 
-Spectra exposes one stdio MCP tool:
+Spectra keeps the default MCP surface to one primary visual tool, matching CodeGraph's one-tool default:
 
 ```text
-spectra_map(query, project_path?, max_nodes?)
+spectra_map(query, projectPath?, maxNodes?)
 ```
 
-Its response contains an `image/png` content block followed by compact anchor metadata. It never includes source bodies.
+Its response contains an `image/png` content block followed by compact anchor metadata. It never includes source bodies. The legacy snake-case parameter spellings remain accepted.
+
+The full CodeGraph-parity query pack is available without rebuilding. Set `SPECTRA_MCP_TOOLS=all`, or provide a comma-separated short-name allowlist such as `map,explore,node,status`. The available tools are:
+
+```text
+spectra_explore(query, maxFiles?, projectPath?)
+spectra_search(query, kind?, limit?, projectPath?)
+spectra_callers(symbol, file?, limit?, projectPath?)
+spectra_callees(symbol, file?, limit?, projectPath?)
+spectra_impact(symbol, file?, depth?, projectPath?)
+spectra_node(symbol?, file?, includeCode?, offset?, limit?, symbolsOnly?, line?, projectPath?)
+spectra_status(projectPath?)
+spectra_files(path?, pattern?, format?, includeMetadata?, maxDepth?, projectPath?)
+```
+
+These tools provide bounded line-numbered source exploration, symbol and relationship queries, impact traversal, source/file views, project inventory, and index health. All support cross-project queries. Configuration values in YAML and properties files are withheld from source responses.
 
 The final metadata line reports watcher health as `autosync=active|degraded pending=N`. Set `SPECTRA_WATCH_DEBOUNCE_MS` to a value from 100 through 60000 to override the default 2000 ms debounce window for unusually bursty repositories.
 
@@ -244,6 +259,7 @@ Implemented:
 - embedded JavaScript/TypeScript bridges, component rendering and event bindings, and conventional SvelteKit, Nuxt, and Astro page routes
 - query-focused deterministic PNG and SVG rendering
 - bounded MCP image and anchor responses
+- the complete CodeGraph v1.3.0 MCP query capability set, with a one-tool default and allowlist-enabled explore/search/traversal/node/files/status tools
 - automatic MCP installation for Claude Code, Cursor, Codex, OpenCode, Hermes Agent, Gemini CLI, Antigravity, and Kiro
 - automatic Codex lifecycle-hook installation
 - append-only State Machine Ledger with replay, recovery, redaction, concurrency control, and bounded projection

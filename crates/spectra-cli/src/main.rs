@@ -4,6 +4,7 @@ mod git_sync;
 mod hook;
 mod install;
 mod mcp;
+mod mcp_query;
 
 use std::{
     path::{Path, PathBuf},
@@ -76,7 +77,7 @@ enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
-    /// Run Spectra's single-tool MCP server over stdio.
+    /// Run Spectra's MCP server over stdio.
     Serve {
         #[arg(long)]
         mcp: bool,
