@@ -3,7 +3,8 @@ use std::path::Path;
 use tree_sitter::{Language, Node as SyntaxNode};
 
 use super::{
-    LanguageAdapter, Relation, Scope, call_target, field_text, inside_type, text, truncate,
+    FileSymbol, LanguageAdapter, Relation, Scope, call_target, field_text, frameworks, inside_type,
+    text, truncate,
 };
 
 pub(crate) struct RustAdapter;
@@ -94,5 +95,9 @@ impl LanguageAdapter for RustAdapter {
                 }]
             })
             .unwrap_or_default()
+    }
+
+    fn file_symbols(&self, _path: &Path, source: &str) -> Vec<FileSymbol> {
+        frameworks::rust_routes(source)
     }
 }

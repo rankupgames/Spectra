@@ -2,7 +2,10 @@ use std::path::Path;
 
 use tree_sitter::{Language, Node as SyntaxNode};
 
-use super::{LanguageAdapter, Relation, Scope, call_target, identifier_names, inside_type};
+use super::{
+    FileSymbol, LanguageAdapter, Relation, Scope, call_target, frameworks, identifier_names,
+    inside_type,
+};
 
 pub(crate) struct PythonAdapter;
 pub(crate) static PYTHON: PythonAdapter = PythonAdapter;
@@ -67,5 +70,9 @@ impl LanguageAdapter for PythonAdapter {
                 target,
             })
             .collect()
+    }
+
+    fn file_symbols(&self, _path: &Path, source: &str) -> Vec<FileSymbol> {
+        frameworks::python_routes(source)
     }
 }

@@ -3,8 +3,8 @@ use std::path::Path;
 use tree_sitter::{Language, Node as SyntaxNode};
 
 use super::{
-    LanguageAdapter, Relation, Scope, field_text, identifier_names, inside_type,
-    leading_identifier, terminal_identifier,
+    FileSymbol, LanguageAdapter, Relation, Scope, field_text, frameworks, identifier_names,
+    inside_type, leading_identifier, terminal_identifier,
 };
 
 pub(crate) struct SwiftAdapter;
@@ -89,5 +89,9 @@ impl LanguageAdapter for SwiftAdapter {
             });
         }
         relations
+    }
+
+    fn file_symbols(&self, _path: &Path, source: &str) -> Vec<FileSymbol> {
+        frameworks::swift_routes(source)
     }
 }

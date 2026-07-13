@@ -585,6 +585,7 @@ fn assemble(cache: &IndexCache) -> Result<CodeIndex> {
     }
 
     let mut definitions: HashMap<String, Vec<NodeId>> = HashMap::new();
+    let mut qualified_definitions = Vec::new();
     for node in &graph.nodes {
         let kind = graph.atom(node.kind);
         if matches!(
@@ -606,19 +607,35 @@ fn assemble(cache: &IndexCache) -> Result<CodeIndex> {
                 .entry(graph.atom(node.label).to_ascii_lowercase())
                 .or_default()
                 .push(node.id);
+            if let Some(qualified_name) = qualified_names.get(&node.id) {
+                qualified_definitions.push((qualified_name.to_ascii_lowercase(), node.id));
+            }
         }
     }
     for (path, file) in &cache.files {
         for pending in &file.edges {
             let source = ids[&(path.clone(), pending.source)];
-            let candidates: Vec<_> = definitions
-                .get(&pending.target_name.to_ascii_lowercase())
-                .map(Vec::as_slice)
-                .unwrap_or_default()
-                .iter()
-                .copied()
-                .filter(|target| definition_matches(&graph, *target, &pending.kind))
-                .collect();
+            let target_name = pending.target_name.to_ascii_lowercase();
+            let candidates: Vec<_> = if target_name.contains("::") {
+                qualified_definitions
+                    .iter()
+                    .filter(|(qualified, _)| {
+                        qualified == &target_name
+                            || qualified.ends_with(&format!("::{target_name}"))
+                    })
+                    .map(|(_, target)| *target)
+                    .filter(|target| definition_matches(&graph, *target, &pending.kind))
+                    .collect()
+            } else {
+                definitions
+                    .get(&target_name)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default()
+                    .iter()
+                    .copied()
+                    .filter(|target| definition_matches(&graph, *target, &pending.kind))
+                    .collect()
+            };
             let exact: Vec<_> = candidates
                 .iter()
                 .copied()
@@ -782,6 +799,48 @@ mod tests {
         assert!(has_node(&file, "method", "run"));
         assert!(has_edge(&file, "implements", "Run"));
         assert!(has_edge(&file, "calls", "helper"));
+    }
+
+    #[test]
+    fn refresh_resolves_framework_routes_to_qualified_handlers() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "spectra-framework-route-test-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(
+            root.join("src/users.routes.ts"),
+            "@Controller('admin/users')\nexport class UsersController {\n@Get(':id')\nshow() {}\n}",
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/admin.controller.ts"),
+            "export class AdminController { show() {} }",
+        )
+        .unwrap();
+
+        let (index, _) = CodeIndex::refresh(&root).unwrap();
+        let route = index
+            .graph
+            .nodes
+            .iter()
+            .find(|node| index.graph.label(node.id) == "GET /admin/users/:id")
+            .unwrap()
+            .id;
+        let handlers = index
+            .graph
+            .edges
+            .iter()
+            .filter(|edge| edge.source == route && index.graph.atom(edge.kind) == "routes_to")
+            .map(|edge| index.graph.label(edge.target))
+            .collect::<Vec<_>>();
+        assert_eq!(handlers, ["show"]);
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

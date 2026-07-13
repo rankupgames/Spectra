@@ -3,8 +3,9 @@ use std::path::Path;
 use tree_sitter::{Language, Node as SyntaxNode};
 
 use super::{
-    LanguageAdapter, Relation, Scope, call_target, field_text, identifier_names,
-    named_child_by_kind, string_literal_value, terminal_identifier, text, truncate,
+    FileSymbol, LanguageAdapter, Relation, Scope, call_target, field_text, frameworks,
+    identifier_names, named_child_by_kind, string_literal_value, terminal_identifier, text,
+    truncate,
 };
 
 pub(crate) struct PhpAdapter;
@@ -106,5 +107,9 @@ impl LanguageAdapter for PhpAdapter {
             }
         }
         relations
+    }
+
+    fn file_symbols(&self, _path: &Path, source: &str) -> Vec<FileSymbol> {
+        frameworks::php_routes(source)
     }
 }

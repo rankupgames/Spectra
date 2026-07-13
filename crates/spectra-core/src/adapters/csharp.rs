@@ -3,8 +3,8 @@ use std::path::Path;
 use tree_sitter::{Language, Node as SyntaxNode};
 
 use super::{
-    LanguageAdapter, Relation, Scope, call_target, identifier_names, named_child_by_kind,
-    terminal_identifier,
+    FileSymbol, LanguageAdapter, Relation, Scope, call_target, frameworks, identifier_names,
+    named_child_by_kind, terminal_identifier,
 };
 
 pub(crate) struct CSharpAdapter;
@@ -66,5 +66,9 @@ impl LanguageAdapter for CSharpAdapter {
                 target,
             })
             .collect()
+    }
+
+    fn file_symbols(&self, _path: &Path, source: &str) -> Vec<FileSymbol> {
+        frameworks::csharp_routes(source)
     }
 }

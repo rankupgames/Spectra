@@ -5,6 +5,7 @@ use tree_sitter::{Language, Node as SyntaxNode};
 mod c_family;
 mod csharp;
 mod dart;
+mod frameworks;
 mod go;
 mod java;
 mod javascript;

@@ -3,8 +3,8 @@ use std::path::Path;
 use tree_sitter::{Language, Node as SyntaxNode};
 
 use super::{
-    LanguageAdapter, Relation, Scope, call_target, identifier_names, named_child_by_kind,
-    terminal_identifier,
+    FileSymbol, LanguageAdapter, Relation, Scope, call_target, frameworks, identifier_names,
+    named_child_by_kind, terminal_identifier,
 };
 
 pub(crate) struct ScalaAdapter;
@@ -19,8 +19,21 @@ impl LanguageAdapter for ScalaAdapter {
         &["scala", "sc"]
     }
 
-    fn language(&self, _path: &Path) -> Option<Language> {
-        Some(tree_sitter_scala::LANGUAGE.into())
+    fn matches_path(&self, path: &Path) -> bool {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| self.extensions().contains(&extension))
+            || path.file_name().and_then(|name| name.to_str()) == Some("routes")
+                && path
+                    .parent()
+                    .and_then(Path::file_name)
+                    .and_then(|name| name.to_str())
+                    == Some("conf")
+    }
+
+    fn language(&self, path: &Path) -> Option<Language> {
+        (path.file_name().and_then(|name| name.to_str()) != Some("routes"))
+            .then(|| tree_sitter_scala::LANGUAGE.into())
     }
 
     fn classify(
@@ -73,5 +86,9 @@ impl LanguageAdapter for ScalaAdapter {
                 target,
             })
             .collect()
+    }
+
+    fn file_symbols(&self, path: &Path, source: &str) -> Vec<FileSymbol> {
+        frameworks::play_routes(path, source)
     }
 }

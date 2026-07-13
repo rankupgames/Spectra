@@ -2,7 +2,10 @@ use std::path::Path;
 
 use tree_sitter::{Language, Node as SyntaxNode};
 
-use super::{LanguageAdapter, Relation, Scope, field_text, identifier_names, terminal_identifier};
+use super::{
+    FileSymbol, LanguageAdapter, Relation, Scope, field_text, frameworks, identifier_names,
+    terminal_identifier,
+};
 
 pub(crate) struct JavaAdapter;
 pub(crate) static JAVA: JavaAdapter = JavaAdapter;
@@ -76,5 +79,9 @@ impl LanguageAdapter for JavaAdapter {
             );
         }
         relations
+    }
+
+    fn file_symbols(&self, _path: &Path, source: &str) -> Vec<FileSymbol> {
+        frameworks::java_routes(source)
     }
 }

@@ -3,8 +3,8 @@ use std::path::Path;
 use tree_sitter::{Language, Node as SyntaxNode};
 
 use super::{
-    LanguageAdapter, Relation, Scope, identifier_names, inside_type, leading_identifier,
-    named_child_by_kind, terminal_identifier,
+    FileSymbol, LanguageAdapter, Relation, Scope, frameworks, identifier_names, inside_type,
+    leading_identifier, named_child_by_kind, terminal_identifier,
 };
 
 pub(crate) struct KotlinAdapter;
@@ -85,5 +85,9 @@ impl LanguageAdapter for KotlinAdapter {
                 target,
             })
             .collect()
+    }
+
+    fn file_symbols(&self, _path: &Path, source: &str) -> Vec<FileSymbol> {
+        frameworks::java_routes(source)
     }
 }

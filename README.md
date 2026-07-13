@@ -267,7 +267,7 @@ Implemented:
 
 Not yet implemented:
 
-- remaining CodeGraph-parity framework routing and cross-language bridges beyond the implemented web, native, configuration, infrastructure, and legacy bridges
+- remaining CodeGraph-parity client/native framework bridges beyond the implemented server routing, web, native, configuration, infrastructure, and legacy packs
 - non-Codex Ledger adapters without a verified lifecycle protocol and recorded-wire replay
 - complete unified-shell interception
 - packaged release binaries and automatic updater

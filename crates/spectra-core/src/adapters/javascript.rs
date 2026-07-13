@@ -3,8 +3,8 @@ use std::path::Path;
 use tree_sitter::{Language, Node as SyntaxNode};
 
 use super::{
-    LanguageAdapter, Relation, Scope, call_target, field_text, identifier_names, inside_type,
-    named_child_by_kind, terminal_identifier, text, truncate,
+    FileSymbol, LanguageAdapter, Relation, Scope, call_target, field_text, frameworks,
+    identifier_names, inside_type, named_child_by_kind, terminal_identifier, text, truncate,
 };
 
 pub(crate) struct JavaScriptAdapter;
@@ -86,6 +86,10 @@ impl LanguageAdapter for JavaScriptAdapter {
                 target,
             })
             .collect()
+    }
+
+    fn file_symbols(&self, _path: &Path, source: &str) -> Vec<FileSymbol> {
+        frameworks::javascript_routes(source)
     }
 }
 

@@ -20,20 +20,20 @@ Core extraction, ecosystem routing, and language bridges may land separately, bu
 
 | Language | Extensions | Core extraction | Semantic edges | Routing / bridges |
 | --- | --- | --- | --- | --- |
-| Rust | `.rs` | Implemented | Calls, imports, trait implementations | Planned |
-| TypeScript / TSX | `.ts`, `.tsx` | Implemented | Calls, imports, extends, implements | Planned |
-| JavaScript / JSX | `.js`, `.jsx`, `.mjs`, `.cjs` | Implemented | Calls, imports, extends | Planned |
-| Python | `.py` | Implemented | Calls, imports, inheritance | Planned |
-| Go | `.go` | Implemented | Calls, package imports | Planned |
-| Java | `.java` | Implemented | Calls, imports, extends, implements | Planned |
+| Rust | `.rs` | Implemented | Calls, imports, trait implementations | Rocket, Axum, and Actix route-to-handler bridges implemented |
+| TypeScript / TSX | `.ts`, `.tsx` | Implemented | Calls, imports, extends, implements | Express and NestJS route-to-handler bridges implemented; client bridges remain |
+| JavaScript / JSX | `.js`, `.jsx`, `.mjs`, `.cjs` | Implemented | Calls, imports, extends | Express and NestJS route-to-handler bridges implemented; client bridges remain |
+| Python | `.py` | Implemented | Calls, imports, inheritance | Django, DRF, Flask, and FastAPI routes implemented |
+| Go | `.go` | Implemented | Calls, package imports | Gin/Echo/Mux/Chi-style routes and GoFrame route metadata implemented |
+| Java | `.java` | Implemented | Calls, imports, extends, implements | Spring routes implemented; Play route files bridge to JVM handlers |
 | C | `.c`, `.h` | Implemented | Calls, includes | Planned |
 | C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx` | Implemented | Calls, includes, inheritance | Planned |
-| C# | `.cs` | Implemented | Calls, imports, extends, implements | Planned |
-| PHP | `.php` | Implemented | Calls, imports/includes, extends, implements | Planned |
-| Ruby | `.rb` | Implemented | Calls, requires, inheritance | Planned |
-| Swift | `.swift` | Implemented | Calls, imports, inheritance and protocol adoption | Planned |
-| Kotlin | `.kt`, `.kts` | Implemented | Calls, imports, inheritance and interface implementation | Planned |
-| Scala | `.scala`, `.sc` | Implemented | Calls, imports, inheritance and trait mixins | Planned |
+| C# | `.cs` | Implemented | Calls, imports, extends, implements | ASP.NET controller and minimal-API routes implemented |
+| PHP | `.php` | Implemented | Calls, imports/includes, extends, implements | Laravel explicit and resource routes implemented |
+| Ruby | `.rb` | Implemented | Calls, requires, inheritance | Rails explicit and resource routes implemented |
+| Swift | `.swift` | Implemented | Calls, imports, inheritance and protocol adoption | Vapor routes implemented; UI bridges remain |
+| Kotlin | `.kt`, `.kts` | Implemented | Calls, imports, inheritance and interface implementation | Spring routes implemented |
+| Scala | `.scala`, `.sc`, Play `conf/routes` | Implemented | Calls, imports, inheritance and trait mixins | Play route-to-handler bridges implemented |
 | Dart | `.dart` | Implemented | Calls, imports, extends, implements, and mixins | Planned |
 | Lua | `.lua` | Implemented | Calls and module requires | Planned |
 | Luau | `.luau` | Implemented | Calls, module requires, and type aliases | Planned |

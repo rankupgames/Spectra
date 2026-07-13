@@ -2,7 +2,9 @@ use std::path::Path;
 
 use tree_sitter::{Language, Node as SyntaxNode};
 
-use super::{LanguageAdapter, Relation, Scope, call_target, field_text, text};
+use super::{
+    FileSymbol, LanguageAdapter, Relation, Scope, call_target, field_text, frameworks, text,
+};
 
 pub(crate) struct GoAdapter;
 pub(crate) static GO: GoAdapter = GoAdapter;
@@ -70,5 +72,9 @@ impl LanguageAdapter for GoAdapter {
                 }]
             })
             .unwrap_or_default()
+    }
+
+    fn file_symbols(&self, _path: &Path, source: &str) -> Vec<FileSymbol> {
+        frameworks::go_routes(source)
     }
 }

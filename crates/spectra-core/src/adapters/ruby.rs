@@ -3,8 +3,8 @@ use std::path::Path;
 use tree_sitter::{Language, Node as SyntaxNode};
 
 use super::{
-    LanguageAdapter, Relation, Scope, field_text, inside_type, string_literal_value,
-    terminal_identifier, text, truncate,
+    FileSymbol, LanguageAdapter, Relation, Scope, field_text, frameworks, inside_type,
+    string_literal_value, terminal_identifier, text, truncate,
 };
 
 pub(crate) struct RubyAdapter;
@@ -92,5 +92,9 @@ impl LanguageAdapter for RubyAdapter {
                 }]
             })
             .unwrap_or_default()
+    }
+
+    fn file_symbols(&self, _path: &Path, source: &str) -> Vec<FileSymbol> {
+        frameworks::ruby_routes(source)
     }
 }

@@ -3,8 +3,9 @@ use std::path::Path;
 use tree_sitter::{Language, Node as SyntaxNode};
 
 use super::{
-    LanguageAdapter, Relation, Scope, call_target, field_text, identifier_names, inside_type,
-    javascript::variable_function_name, named_child_by_kind, text, truncate,
+    FileSymbol, LanguageAdapter, Relation, Scope, call_target, field_text, frameworks,
+    identifier_names, inside_type, javascript::variable_function_name, named_child_by_kind, text,
+    truncate,
 };
 
 pub(crate) struct TypeScriptAdapter;
@@ -105,5 +106,9 @@ impl LanguageAdapter for TypeScriptAdapter {
                     .map(move |target| Relation { kind, target })
             })
             .collect()
+    }
+
+    fn file_symbols(&self, _path: &Path, source: &str) -> Vec<FileSymbol> {
+        frameworks::javascript_routes(source)
     }
 }
