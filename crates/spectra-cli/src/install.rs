@@ -122,12 +122,12 @@ pub fn install_codex(dry_run: bool) -> Result<InstallOutcome, Box<dyn std::error
 pub fn uninstall_codex(dry_run: bool) -> Result<UninstallOutcome, Box<dyn std::error::Error>> {
     let config = get_codex_config()?;
     let spectra = std::env::current_exe()?.canonicalize()?;
-    if let Some(config) = &config {
-        if ownership(config, &spectra)? == Ownership::Foreign {
-            return Err(
-                "Codex's 'spectra' MCP entry is not owned by Spectra; refusing to remove it".into(),
-            );
-        }
+    if let Some(config) = &config
+        && ownership(config, &spectra)? == Ownership::Foreign
+    {
+        return Err(
+            "Codex's 'spectra' MCP entry is not owned by Spectra; refusing to remove it".into(),
+        );
     }
     let has_hooks = has_owned_hooks()?;
     if config.is_none() && !has_hooks {

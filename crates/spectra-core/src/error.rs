@@ -4,6 +4,7 @@ use std::{fmt, io};
 pub enum Error {
     Io(io::Error),
     Json(serde_json::Error),
+    Index(String),
     Parse(String),
     Graph(String),
     Render(String),
@@ -16,6 +17,7 @@ impl fmt::Display for Error {
         match self {
             Self::Io(error) => write!(f, "I/O error: {error}"),
             Self::Json(error) => write!(f, "index serialization error: {error}"),
+            Self::Index(message) => write!(f, "index error: {message}"),
             Self::Parse(message) => write!(f, "parse error: {message}"),
             Self::Graph(message) => write!(f, "invalid graph: {message}"),
             Self::Render(message) => write!(f, "render error: {message}"),

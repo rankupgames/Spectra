@@ -46,6 +46,21 @@ The runner verifies commit SHAs, records tool versions and cold indexing times, 
 
 Generated reports are written under `benchmarks/results/`. That directory is intentionally ignored by Git; publish selected results separately when they have been reviewed for release.
 
+## Adapter parity gate
+
+The v0.2 adapter gate compares framework route labels on five pinned, real repositories covering FastAPI/React, Laravel, NestJS, Spring MVC, and Vapor. [`adapter-repositories.json`](adapter-repositories.json) records the exact URLs, commits, and minimum Spectra route counts. Materialize each checkout beneath a corpus root using its manifest `name`, then run:
+
+```sh
+cargo run --release -p spectra-context --bin spectra-adapter-eval -- \
+  --manifest benchmarks/adapter-repositories.json \
+  --corpus-root /path/to/adapter-corpus \
+  --output benchmarks/results/adapter-parity \
+  --codegraph-bin /path/to/codegraph \
+  --reindex
+```
+
+The runner verifies every commit, rebuilds both indexes, compares the complete CodeGraph route-label set with Spectra, requires the pinned minimum Spectra route count, measures resolved Spectra route edges, and exits nonzero on a gap. Additional Spectra routes are reported rather than treated as failures because the reference may detect no routes in a framework it otherwise recognizes. The reviewed v0.2 baseline is recorded in [`v0.2-baseline.md`](v0.2-baseline.md).
+
 ## State Machine Ledger benchmark
 
 The deterministic Ledger benchmark compares replaying a verbose conversational/terminal transcript with replaying the bounded immutable projection. It covers successful edit/verification, failed-then-repaired verification, and a blocked session containing a credential fixture.

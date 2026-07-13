@@ -1,7 +1,10 @@
 mod agents;
+mod autosync;
+mod git_sync;
 mod hook;
 mod install;
 mod mcp;
+mod mcp_query;
 
 use std::{
     path::{Path, PathBuf},
@@ -10,7 +13,7 @@ use std::{
 
 use agents::Agent;
 use clap::{Parser, Subcommand};
-use spectra_core::{CodeIndex, map_project};
+use spectra_core::{IndexReport, map_project, sync_project};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -47,10 +50,22 @@ enum Command {
     /// Internal Codex lifecycle adapter. Reads one hook event from stdin.
     #[command(hide = true)]
     Hook,
-    /// Build or refresh the local Rust topology index.
+    /// Build or refresh the local polyglot topology index.
     Init {
         #[arg(default_value = ".")]
         path: PathBuf,
+    },
+    /// Reconcile the project index, including for Git hook fallback use.
+    Sync {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(short, long)]
+        quiet: bool,
+    },
+    /// Manage Git-based synchronization fallback for a project.
+    Autosync {
+        #[command(subcommand)]
+        command: AutosyncCommand,
     },
     /// Render a query-focused PNG and SVG topology map.
     Map {
@@ -62,10 +77,29 @@ enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
-    /// Run Spectra's single-tool MCP server over stdio.
+    /// Run Spectra's MCP server over stdio.
     Serve {
         #[arg(long)]
         mcp: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AutosyncCommand {
+    /// Install ownership-safe post-commit, post-merge, and post-checkout hooks.
+    Install {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+    /// Remove only the Git hook blocks owned by Spectra.
+    Remove {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+    /// Show whether all Git fallback hooks are installed.
+    Status {
+        #[arg(default_value = ".")]
+        path: PathBuf,
     },
 }
 
@@ -93,10 +127,43 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::Hook => hook::run_stdin(),
         Command::Init { path } => {
-            let (_, report) = CodeIndex::refresh(&path)?;
+            let (_, report) = sync_project(&path)?;
+            print_index_report(&report);
+        }
+        Command::Sync { path, quiet } => {
+            let (_, report) = sync_project(&path)?;
+            if !quiet {
+                print_index_report(&report);
+            }
+        }
+        Command::Autosync {
+            command: AutosyncCommand::Install { path },
+        } => {
+            let report = git_sync::install(&path)?;
             println!(
-                "Indexed {} Rust files ({} changed, {} removed): {} nodes, {} edges",
-                report.files, report.changed, report.removed, report.nodes, report.edges
+                "Installed Spectra autosync fallback in {} ({})",
+                report.hooks_dir.display(),
+                report.hooks.join(", ")
+            );
+        }
+        Command::Autosync {
+            command: AutosyncCommand::Remove { path },
+        } => {
+            let report = git_sync::remove(&path)?;
+            println!(
+                "Removed {} Spectra autosync hook(s) from {}",
+                report.hooks.len(),
+                report.hooks_dir.display()
+            );
+        }
+        Command::Autosync {
+            command: AutosyncCommand::Status { path },
+        } => {
+            let (status, hooks_dir) = git_sync::status(&path)?;
+            println!(
+                "Git autosync fallback={} ({})",
+                status.label(),
+                hooks_dir.display()
             );
         }
         Command::Map {
@@ -117,6 +184,13 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn print_index_report(report: &IndexReport) {
+    println!(
+        "Indexed {} source files ({} changed, {} removed): {} nodes, {} edges",
+        report.files, report.changed, report.removed, report.nodes, report.edges
+    );
+}
+
 fn print_agent_report(report: agents::Report) -> Result<(), Box<dyn std::error::Error>> {
     for message in report.messages {
         println!("{message}");
@@ -129,16 +203,7 @@ fn print_agent_report(report: agents::Report) -> Result<(), Box<dyn std::error::
 }
 
 fn print_anchors(artifact: &spectra_core::MapArtifact) {
-    for (id, anchor) in &artifact.anchors {
-        println!(
-            "{id}={}:{}-{}",
-            anchor.path, anchor.start_line, anchor.end_line
-        );
-    }
-    println!(
-        "nodes={} truncated={} index=v{}",
-        artifact.node_count, artifact.truncated, artifact.index_version
-    );
+    println!("{}", artifact.compact_metadata());
 }
 
 fn display_relative<'a>(path: &'a Path, project: &'a Path) -> String {

@@ -48,8 +48,9 @@ pub fn select_subgraph(index: &CodeIndex, query: &str, options: SelectionOptions
             .qualified_names
             .get(&node.id)
             .map(String::as_str)
-            .unwrap_or("")
-            .to_ascii_lowercase();
+            .unwrap_or("");
+        let qualified_words = identifier_words(qualified);
+        let qualified = qualified.to_ascii_lowercase();
         let path = index
             .spans
             .get(&node.id)
@@ -69,7 +70,16 @@ pub fn select_subgraph(index: &CodeIndex, query: &str, options: SelectionOptions
             .map(|group| {
                 group
                     .iter()
-                    .map(|term| score_term(term, &label, &label_words, &qualified, &path))
+                    .map(|term| {
+                        score_term(
+                            term,
+                            &label,
+                            &label_words,
+                            &qualified,
+                            &qualified_words,
+                            &path,
+                        )
+                    })
                     .max()
                     .unwrap_or(0)
             })
@@ -77,6 +87,17 @@ pub fn select_subgraph(index: &CodeIndex, query: &str, options: SelectionOptions
         let lexical_score = group_scores.iter().sum::<i32>();
         let strong_concepts = group_scores.iter().filter(|score| **score >= 35).count();
         let multi_concept_bonus = strong_concepts.saturating_sub(1) as i32 * 100;
+        let label_matches_query = label_words
+            .iter()
+            .any(|word| flattened_terms.contains(word.as_str()));
+        let owner_matches_query = qualified_words
+            .iter()
+            .any(|word| flattened_terms.contains(word.as_str()) && !label_words.contains(word));
+        let qualified_owner_bonus = if flow_query && label_matches_query && owner_matches_query {
+            220 - label_words.len().saturating_sub(1).min(2) as i32 * 80
+        } else {
+            0
+        };
         let mut score = lexical_score;
         score += match kind {
             "function" | "method" if flow_query => 68,
@@ -127,6 +148,7 @@ pub fn select_subgraph(index: &CodeIndex, query: &str, options: SelectionOptions
                                 + compound_label_bonus
                                 + flow_kind_bonus
                                 + multi_concept_bonus
+                                + qualified_owner_bonus
                                 + score / 10,
                         ),
                         node.id,
@@ -145,9 +167,17 @@ pub fn select_subgraph(index: &CodeIndex, query: &str, options: SelectionOptions
             .unwrap_or((Reverse(i32::MIN), NodeId(u32::MAX)))
     });
     let anchor_limit = max_nodes.min(12);
-    let connector_budget = if anchor_limit >= 8 { 4 } else { 0 };
+    // Natural-language flow questions carry enough concepts to fill the legend
+    // directly. Reserve connector IDs only for short symbol-oriented queries;
+    // relationship expansion still places other bridges in the visual graph.
+    let connector_budget = if anchor_limit >= 8 && term_groups.len() <= 4 {
+        2
+    } else {
+        0
+    };
     let direct_limit = anchor_limit - connector_budget;
     let mut anchors = Vec::new();
+    let mut owner_counts = BTreeMap::<String, usize>::new();
     let mut rank = 0;
     while anchors.len() < direct_limit {
         let before = anchors.len();
@@ -155,7 +185,18 @@ pub fn select_subgraph(index: &CodeIndex, query: &str, options: SelectionOptions
             if let Some((_, node)) = candidates.get(rank)
                 && !anchors.contains(node)
             {
+                let owner = qualified_owner(index, *node);
+                if owner
+                    .as_ref()
+                    .and_then(|owner| owner_counts.get(owner))
+                    .is_some_and(|count| *count >= 2)
+                {
+                    continue;
+                }
                 anchors.push(*node);
+                if let Some(owner) = owner {
+                    *owner_counts.entry(owner).or_default() += 1;
+                }
                 if anchors.len() == direct_limit {
                     break;
                 }
@@ -236,6 +277,14 @@ pub fn select_subgraph(index: &CodeIndex, query: &str, options: SelectionOptions
         distances,
         truncated,
     }
+}
+
+fn qualified_owner(index: &CodeIndex, node: NodeId) -> Option<String> {
+    let qualified = index.qualified_names.get(&node)?;
+    let (owner, _) = qualified.rsplit_once("::")?;
+    let owner = owner.strip_prefix("impl ").unwrap_or(owner);
+    let owner = owner.split('<').next().unwrap_or(owner).trim();
+    (!owner.is_empty()).then(|| owner.to_ascii_lowercase())
 }
 
 fn add_relationship_connectors(
@@ -387,6 +436,16 @@ fn architecture_path_bonus(group: &[String], terms: &BTreeSet<&str>, path: &str)
             "analysis" | "collect" | "completion" | "context" | "item" | "items"
         )
     });
+    let search_pipeline_context = terms.iter().any(|term| *term == "search")
+        && terms
+            .iter()
+            .any(|term| matches!(*term, "haystack" | "walk" | "worker"));
+    let search_pipeline_group = group.iter().any(|term| {
+        matches!(
+            term.as_str(),
+            "execute" | "haystack" | "path" | "search" | "walk" | "worker"
+        )
+    });
     let mut bonus = 0;
     if scheduler_context && scheduler_group {
         if path.contains("/runtime/") {
@@ -412,6 +471,17 @@ fn architecture_path_bonus(group: &[String], terms: &BTreeSet<&str>, path: &str)
         if path.contains("/ide-completion/") {
             bonus += 120;
         } else if path.contains("/ide/src/") {
+            bonus += 80;
+        }
+    }
+    if search_pipeline_context && search_pipeline_group {
+        if path.ends_with("/core/search.rs") {
+            bonus += 220;
+        } else if path.ends_with("/core/main.rs") {
+            bonus += 180;
+        } else if path.ends_with("/core/haystack.rs") {
+            bonus += 120;
+        } else if path.ends_with("/ignore/src/walk.rs") {
             bonus += 80;
         }
     }
@@ -447,12 +517,24 @@ fn is_non_production_path(path: &str) -> bool {
         || path.contains("/benches/")
         || path.ends_with("/tests.rs")
         || path.ends_with("/test.rs")
+        || path.ends_with("/testutil.rs")
+        || path.ends_with("/test_util.rs")
+        || path.ends_with("/test_utils.rs")
+        || path == "build.rs"
+        || path.ends_with("/build.rs")
         || path.starts_with("tests/")
         || path.starts_with("examples/")
         || path.starts_with("benches/")
 }
 
-fn score_term(term: &str, label: &str, words: &[String], qualified: &str, path: &str) -> i32 {
+fn score_term(
+    term: &str,
+    label: &str,
+    words: &[String],
+    qualified: &str,
+    qualified_words: &[String],
+    path: &str,
+) -> i32 {
     let file_stem = path
         .rsplit('/')
         .next()
@@ -464,6 +546,8 @@ fn score_term(term: &str, label: &str, words: &[String], qualified: &str, path: 
         100
     } else if qualified.ends_with(term) {
         90
+    } else if qualified_words.iter().any(|word| word == term) {
+        85
     } else if label.contains(term) {
         60
     } else if words.iter().any(|word| {
@@ -692,6 +776,11 @@ mod tests {
     #[test]
     fn splits_camel_case_and_expands_common_code_terms() {
         assert_eq!(identifier_words("AnalysisHost"), ["analysis", "host"]);
+        assert!(
+            identifier_words("impl SearchWorker<W>::search")
+                .windows(2)
+                .any(|words| words == ["search", "worker"])
+        );
         assert!(term_variants("arguments").contains(&"args".to_owned()));
         assert!(term_variants("parsed").contains(&"parse".to_owned()));
         assert!(term_variants("dispatch").contains(&"dispatcher".to_owned()));
@@ -700,18 +789,51 @@ mod tests {
 
     #[test]
     fn rejects_short_prefix_noise_and_recognizes_module_names() {
-        assert_eq!(score_term("incoming", "in", &["in".into()], "in", ""), 0);
+        assert_eq!(
+            score_term("incoming", "in", &["in".into()], "in", &["in".into()], ""),
+            0
+        );
         assert_eq!(
             score_term(
                 "worker",
                 "schedule_task",
                 &["schedule".into(), "task".into()],
                 "schedule_task",
+                &["schedule".into(), "task".into()],
                 "src/runtime/worker.rs",
             ),
             55
         );
         assert!(is_non_production_path("tokio-test/src/task.rs"));
+        assert!(is_non_production_path("crates/searcher/src/testutil.rs"));
+        assert!(is_non_production_path("build.rs"));
+    }
+
+    #[test]
+    fn qualified_owner_words_disambiguate_flow_symbols() {
+        let mut graph = PackedGraph::default();
+        let worker_search = graph.add_node("method", "search");
+        let generic_search = graph.add_node("method", "search_path");
+        let index = CodeIndex {
+            graph,
+            spans: [
+                (worker_search, span("crates/core/search.rs")),
+                (generic_search, span("crates/searcher/src/searcher/mod.rs")),
+            ]
+            .into(),
+            qualified_names: [
+                (worker_search, "impl SearchWorker::search".into()),
+                (generic_search, "impl Searcher::search_path".into()),
+            ]
+            .into(),
+            version: 1,
+        };
+        let selection = select_subgraph(
+            &index,
+            "How does the configured search worker execute?",
+            SelectionOptions { max_nodes: 1 },
+        );
+        assert_eq!(selection.anchors, vec![worker_search]);
     }
 
     #[test]

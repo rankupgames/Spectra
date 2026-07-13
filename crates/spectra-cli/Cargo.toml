@@ -21,11 +21,13 @@ atomic-write-file.workspace = true
 base64.workspace = true
 clap.workspace = true
 jsonc-parser.workspace = true
+ignore.workspace = true
+notify.workspace = true
 rmcp.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-spectra-core = { package = "spectra-context-core", version = "0.1.0", path = "../spectra-core" }
+spectra-core = { package = "spectra-context-core", version = "0.2.0", path = "../spectra-core" }
 tokio.workspace = true
 
 [[bin]]
@@ -43,3 +45,7 @@ path = "src/bin/spectra-ledger-bench.rs"
 [[bin]]
 name = "spectra-ledger-grok-eval"
 path = "src/bin/spectra-ledger-grok-eval.rs"
+
+[[bin]]
+name = "spectra-adapter-eval"
+path = "src/bin/spectra-adapter-eval.rs"

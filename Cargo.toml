@@ -3,7 +3,7 @@ members = ["crates/spectra-core", "crates/spectra-cli"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.88"
@@ -16,6 +16,7 @@ base64 = "0.22.1"
 clap = { version = "4.6.1", features = ["derive"] }
 ignore = "0.4.28"
 jsonc-parser = { version = "0.33.0", default-features = false, features = ["cst", "serde_json"] }
+notify = "8.2.0"
 resvg = { version = "0.47.0", default-features = true }
 rmcp = { version = "2.2.0", default-features = false, features = ["base64", "macros", "server", "transport-io"] }
 schemars = "1.2.1"
@@ -24,4 +25,26 @@ serde_json = "1.0.150"
 tiny-skia = "0.12.0"
 tokio = { version = "1.52.3", features = ["io-std", "macros", "rt-multi-thread"] }
 tree-sitter = "0.26.11"
+tree-sitter-c = "0.24.2"
+tree-sitter-c-sharp = "0.23.5"
+tree-sitter-cpp = "0.23.4"
+tree-sitter-cuda = "0.21.1"
+tree-sitter-dart = "0.2.0"
+tree-sitter-go = "0.25.0"
+tree-sitter-html = "0.23.2"
+tree-sitter-java = "0.23.5"
+tree-sitter-javascript = "0.25.0"
+tree-sitter-kotlin-ng = "1.1.0"
+tree-sitter-lua = "0.5.0"
+tree-sitter-luau = "1.2.0"
+tree-sitter-objc = "3.0.2"
+tree-sitter-python = "0.25.0"
+tree-sitter-php = "0.24.2"
 tree-sitter-rust = "0.24.2"
+tree-sitter-ruby = "0.23.1"
+tree-sitter-scala = "0.26.0"
+tree-sitter-svelte-ng = "1.0.2"
+tree-sitter-swift = "0.7.3"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-vue-next = "0.1.0"
+tree-sitter-astro-next = "0.1.1"

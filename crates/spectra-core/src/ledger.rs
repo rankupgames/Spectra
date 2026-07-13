@@ -297,15 +297,19 @@ impl LedgerLock {
             fs::create_dir_all(parent)?;
         }
         for _ in 0..LOCK_ATTEMPTS {
-            match fs::create_dir(&path) {
-                Ok(()) => return Ok(Self { path }),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            match OpenOptions::new().create_new(true).write(true).open(&path) {
+                Ok(_) => return Ok(Self { path }),
+                Err(error) if is_lock_contention(&error) => {
                     let stale = fs::metadata(&path)
                         .and_then(|metadata| metadata.modified())
                         .and_then(|modified| modified.elapsed().map_err(std::io::Error::other))
                         .is_ok_and(|age| age > STALE_LOCK_AGE);
                     if stale {
-                        let _ = fs::remove_dir(&path);
+                        if path.is_dir() {
+                            let _ = fs::remove_dir(&path);
+                        } else {
+                            let _ = fs::remove_file(&path);
+                        }
                     } else {
                         thread::sleep(LOCK_RETRY);
                     }
@@ -319,9 +323,26 @@ impl LedgerLock {
     }
 }
 
+fn is_lock_contention(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::AlreadyExists {
+        return true;
+    }
+
+    // Windows can report a lock file that is being deleted or replaced as access denied,
+    // sharing violation, or lock violation instead of already exists. All are transient here.
+    #[cfg(windows)]
+    {
+        matches!(error.raw_os_error(), Some(5 | 32 | 33))
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 impl Drop for LedgerLock {
     fn drop(&mut self) {
-        let _ = fs::remove_dir(&self.path);
+        let _ = fs::remove_file(&self.path);
     }
 }
 
@@ -738,6 +759,26 @@ mod tests {
         assert_eq!(replay.events().last().unwrap().sequence, 16);
         assert_eq!(replay.state(), LedgerState::Observing);
         fs::remove_dir_all(root.as_ref()).unwrap();
+    }
+
+    #[test]
+    fn lock_contention_classifies_platform_errors() {
+        assert!(is_lock_contention(&std::io::Error::from(
+            std::io::ErrorKind::AlreadyExists,
+        )));
+        assert!(!is_lock_contention(&std::io::Error::from(
+            std::io::ErrorKind::NotFound,
+        )));
+
+        #[cfg(windows)]
+        for code in [5, 32, 33] {
+            assert!(is_lock_contention(&std::io::Error::from_raw_os_error(code)));
+        }
+
+        #[cfg(not(windows))]
+        assert!(!is_lock_contention(&std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied,
+        )));
     }
 
     #[test]
