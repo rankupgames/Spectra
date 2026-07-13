@@ -27,7 +27,12 @@ impl LanguageAdapter for TypeScriptAdapter {
         }
     }
 
-    fn classify(&self, node: SyntaxNode<'_>, scopes: &[Scope]) -> Option<&'static str> {
+    fn classify(
+        &self,
+        node: SyntaxNode<'_>,
+        _source: &[u8],
+        scopes: &[Scope],
+    ) -> Option<&'static str> {
         match node.kind() {
             "class_declaration" | "abstract_class_declaration" => Some("class"),
             "interface_declaration" => Some("interface"),

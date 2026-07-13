@@ -20,7 +20,12 @@ impl LanguageAdapter for GoAdapter {
         tree_sitter_go::LANGUAGE.into()
     }
 
-    fn classify(&self, node: SyntaxNode<'_>, _scopes: &[Scope]) -> Option<&'static str> {
+    fn classify(
+        &self,
+        node: SyntaxNode<'_>,
+        _source: &[u8],
+        _scopes: &[Scope],
+    ) -> Option<&'static str> {
         match node.kind() {
             "package_clause" => Some("module"),
             "function_declaration" => Some("function"),

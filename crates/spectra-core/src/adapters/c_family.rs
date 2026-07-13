@@ -25,7 +25,12 @@ impl LanguageAdapter for CAdapter {
         tree_sitter_c::LANGUAGE.into()
     }
 
-    fn classify(&self, node: SyntaxNode<'_>, _scopes: &[Scope]) -> Option<&'static str> {
+    fn classify(
+        &self,
+        node: SyntaxNode<'_>,
+        _source: &[u8],
+        _scopes: &[Scope],
+    ) -> Option<&'static str> {
         classify_c_family(node, false)
     }
 
@@ -55,7 +60,12 @@ impl LanguageAdapter for CppAdapter {
         tree_sitter_cpp::LANGUAGE.into()
     }
 
-    fn classify(&self, node: SyntaxNode<'_>, scopes: &[Scope]) -> Option<&'static str> {
+    fn classify(
+        &self,
+        node: SyntaxNode<'_>,
+        _source: &[u8],
+        scopes: &[Scope],
+    ) -> Option<&'static str> {
         if node.kind() == "function_definition" {
             return Some(if inside_type(scopes) {
                 "method"

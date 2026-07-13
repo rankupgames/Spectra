@@ -31,11 +31,17 @@ Core extraction, ecosystem routing, and language bridges may land separately, bu
 | C# | `.cs` | Implemented | Calls, imports, extends, implements | Planned |
 | PHP | `.php` | Implemented | Calls, imports/includes, extends, implements | Planned |
 | Ruby | `.rb` | Implemented | Calls, requires, inheritance | Planned |
+| Swift | `.swift` | Implemented | Calls, imports, inheritance and protocol adoption | Planned |
+| Kotlin | `.kt`, `.kts` | Implemented | Calls, imports, inheritance and interface implementation | Planned |
+| Scala | `.scala`, `.sc` | Implemented | Calls, imports, inheritance and trait mixins | Planned |
+| Dart | `.dart` | Implemented | Calls, imports, extends, implements, and mixins | Planned |
+| Lua | `.lua` | Implemented | Calls and module requires | Planned |
+| Luau | `.luau` | Implemented | Calls, module requires, and type aliases | Planned |
 
 The common resolver links a target only when there is one matching definition. Multiple candidates produce a typed uncertain boundary, preserving ambiguity in the rendered topology.
 
 ## Parity baseline
 
-The baseline is CodeGraph v1.3.0 as installed when v0.2 development began. Remaining families include Objective-C, Swift, Kotlin, Scala, Dart, Lua/Luau, R, Nix, Erlang, Solidity, Terraform/OpenTofu, Svelte, Vue, Astro, Liquid, Pascal/Delphi, ArkTS, Visual Basic .NET, CFML, COBOL, CUDA, and Metal.
+The baseline is CodeGraph v1.3.0 as installed when v0.2 development began. Remaining families include Objective-C, R, Nix, Erlang, Solidity, Terraform/OpenTofu, Svelte, Vue, Astro, Liquid, Pascal/Delphi, ArkTS, Visual Basic .NET, CFML, COBOL, CUDA, and Metal.
 
 Parity is pinned to this baseline so a moving upstream language list cannot silently change the release gate. Later CodeGraph additions can be adopted deliberately.

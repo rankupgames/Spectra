@@ -23,7 +23,12 @@ impl LanguageAdapter for PhpAdapter {
         tree_sitter_php::LANGUAGE_PHP.into()
     }
 
-    fn classify(&self, node: SyntaxNode<'_>, _scopes: &[Scope]) -> Option<&'static str> {
+    fn classify(
+        &self,
+        node: SyntaxNode<'_>,
+        _source: &[u8],
+        _scopes: &[Scope],
+    ) -> Option<&'static str> {
         match node.kind() {
             "namespace_definition" => Some("module"),
             "class_declaration" => Some("class"),

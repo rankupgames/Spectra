@@ -228,7 +228,7 @@ fn visit(
     owner: Option<u32>,
     scopes: &mut Vec<Scope>,
 ) {
-    let mapped = adapter.classify(syntax, scopes);
+    let mapped = adapter.classify(syntax, source, scopes);
 
     let mut next_parent = parent;
     let mut next_owner = owner;
@@ -601,12 +601,108 @@ mod tests {
     }
 
     #[test]
+    fn extracts_swift_protocols_inheritance_methods_and_calls() {
+        let file = parsed(
+            "App.swift",
+            "protocol Run { func run() }\nclass Base {}\nclass App: Base, Run { func run() { helper() } }\nfunc helper() {}\n",
+        );
+        assert!(has_node(&file, "interface", "Run"));
+        assert!(has_node(&file, "class", "App"));
+        assert!(has_node(&file, "method", "run"));
+        assert!(has_edge(&file, "inherits", "Base"));
+        assert!(has_edge(&file, "inherits", "Run"));
+        assert!(has_edge(&file, "calls", "helper"));
+    }
+
+    #[test]
+    fn extracts_kotlin_interfaces_inheritance_methods_and_calls() {
+        let file = parsed(
+            "App.kt",
+            "interface Run {\n    fun run(): Unit\n}\nopen class Base {}\nclass App : Base(), Run {\n    override fun run() { helper() }\n}\nfun helper() {}\n",
+        );
+        assert!(has_node(&file, "interface", "Run"));
+        assert!(has_node(&file, "class", "App"));
+        assert!(has_node(&file, "method", "run"));
+        assert!(has_edge(&file, "inherits", "Base"));
+        assert!(has_edge(&file, "inherits", "Run"));
+        assert!(has_edge(&file, "calls", "helper"));
+    }
+
+    #[test]
+    fn extracts_scala_traits_inheritance_methods_and_calls() {
+        let file = parsed(
+            "App.scala",
+            "trait Run { def run(): Unit }\nclass Base\nclass App extends Base with Run { def run(): Unit = helper() }\ndef helper(): Unit = ()\n",
+        );
+        assert!(has_node(&file, "trait", "Run"));
+        assert!(has_node(&file, "class", "App"));
+        assert!(has_node(&file, "method", "run"));
+        assert!(has_edge(&file, "inherits", "Base"));
+        assert!(has_edge(&file, "inherits", "Run"));
+        assert!(has_edge(&file, "calls", "helper"));
+    }
+
+    #[test]
+    fn extracts_dart_types_methods_inheritance_and_calls() {
+        let file = parsed(
+            "app.dart",
+            "abstract class Run { void run(); }\nmixin Track {}\nclass Base {}\nclass App extends Base with Track implements Run { void run() { helper(); } }\nvoid helper() {}\n",
+        );
+        assert!(has_node(&file, "class", "App"));
+        assert!(has_node(&file, "method", "run"));
+        assert!(has_node(&file, "function", "helper"));
+        assert!(has_edge(&file, "inherits", "Base"));
+        assert!(has_edge(&file, "inherits", "Run"));
+        assert!(has_edge(&file, "inherits", "Track"));
+        assert!(has_edge(&file, "calls", "helper"));
+    }
+
+    #[test]
+    fn extracts_lua_methods_requires_and_calls() {
+        let file = parsed(
+            "app.lua",
+            "local helper_module = require(\"helper.lua\")\nfunction App.run() helper() end\nfunction helper() end\n",
+        );
+        assert!(has_node(&file, "method", "run"));
+        assert!(has_node(&file, "function", "helper"));
+        assert!(has_edge(&file, "imports", "helper.lua"));
+        assert!(has_edge(&file, "calls", "helper"));
+    }
+
+    #[test]
+    fn extracts_luau_types_requires_and_calls() {
+        let file = parsed(
+            "app.luau",
+            "export type Result = string\nlocal helper_module = require(\"helper\")\nfunction run(): () helper() end\nfunction helper(): () end\n",
+        );
+        assert!(has_node(&file, "type_alias", "Result"));
+        assert!(has_node(&file, "function", "run"));
+        assert!(has_edge(&file, "imports", "helper.luau"));
+        assert!(has_edge(&file, "calls", "helper"));
+    }
+
+    #[test]
     fn language_registry_is_the_discovery_contract() {
         let supported = adapters::supported_languages();
-        assert_eq!(supported.len(), 11);
+        assert_eq!(supported.len(), 17);
         for path in [
-            "lib.rs", "app.tsx", "app.jsx", "app.py", "app.go", "App.java", "app.c", "app.cpp",
-            "App.cs", "app.php", "app.rb",
+            "lib.rs",
+            "app.tsx",
+            "app.jsx",
+            "app.py",
+            "app.go",
+            "App.java",
+            "app.c",
+            "app.cpp",
+            "App.cs",
+            "app.php",
+            "app.rb",
+            "App.swift",
+            "App.kt",
+            "App.scala",
+            "app.dart",
+            "app.lua",
+            "app.luau",
         ] {
             assert!(adapters::for_path(Path::new(path)).is_some(), "{path}");
         }

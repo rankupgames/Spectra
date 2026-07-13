@@ -20,7 +20,12 @@ impl LanguageAdapter for JavaAdapter {
         tree_sitter_java::LANGUAGE.into()
     }
 
-    fn classify(&self, node: SyntaxNode<'_>, _scopes: &[Scope]) -> Option<&'static str> {
+    fn classify(
+        &self,
+        node: SyntaxNode<'_>,
+        _source: &[u8],
+        _scopes: &[Scope],
+    ) -> Option<&'static str> {
         match node.kind() {
             "package_declaration" => Some("module"),
             "class_declaration" | "record_declaration" => Some("class"),

@@ -4,23 +4,32 @@ use tree_sitter::{Language, Node as SyntaxNode};
 
 mod c_family;
 mod csharp;
+mod dart;
 mod go;
 mod java;
 mod javascript;
+mod kotlin;
+mod lua_family;
 mod php;
 mod python;
 mod ruby;
 mod rust;
+mod scala;
+mod swift;
 mod typescript;
 
 pub(crate) use go::GO;
 pub(crate) use java::JAVA;
 pub(crate) use javascript::JAVASCRIPT;
+pub(crate) use kotlin::KOTLIN;
+pub(crate) use lua_family::{LUA, LUAU};
 pub(crate) use python::PYTHON;
 pub(crate) use rust::RUST;
+pub(crate) use scala::SCALA;
+pub(crate) use swift::SWIFT;
 pub(crate) use typescript::TYPESCRIPT;
 
-static ADAPTERS: [&dyn LanguageAdapter; 11] = [
+static ADAPTERS: [&dyn LanguageAdapter; 17] = [
     &RUST,
     &TYPESCRIPT,
     &JAVASCRIPT,
@@ -32,6 +41,12 @@ static ADAPTERS: [&dyn LanguageAdapter; 11] = [
     &CSHARP,
     &PHP,
     &RUBY,
+    &SWIFT,
+    &KOTLIN,
+    &SCALA,
+    &DART,
+    &LUA,
+    &LUAU,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,7 +71,12 @@ pub(crate) trait LanguageAdapter: Sync {
     fn id(&self) -> &'static str;
     fn extensions(&self) -> &'static [&'static str];
     fn language(&self, path: &Path) -> Language;
-    fn classify(&self, node: SyntaxNode<'_>, scopes: &[Scope]) -> Option<&'static str>;
+    fn classify(
+        &self,
+        node: SyntaxNode<'_>,
+        source: &[u8],
+        scopes: &[Scope],
+    ) -> Option<&'static str>;
 
     fn label(&self, node: SyntaxNode<'_>, source: &[u8], mapped_kind: &str) -> Option<String> {
         if mapped_kind == "import" {
@@ -129,6 +149,25 @@ pub(crate) fn field_text<'a>(
 pub(crate) fn call_target(node: SyntaxNode<'_>, field: &str, source: &[u8]) -> Option<String> {
     let target = node.child_by_field_name(field)?;
     terminal_identifier(target, source)
+}
+
+pub(crate) fn leading_identifier(node: SyntaxNode<'_>, source: &[u8]) -> Option<String> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .find_map(|child| terminal_identifier(child, source))
+}
+
+pub(crate) fn descendant_field_text<'a>(
+    node: SyntaxNode<'_>,
+    field: &str,
+    source: &'a [u8],
+) -> Option<&'a str> {
+    if let Some(value) = field_text(node, field, source) {
+        return Some(value);
+    }
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .find_map(|child| descendant_field_text(child, field, source))
 }
 
 pub(crate) fn terminal_identifier(node: SyntaxNode<'_>, source: &[u8]) -> Option<String> {
@@ -231,5 +270,6 @@ pub(crate) fn truncate(value: &str, max: usize) -> String {
 }
 pub(crate) use c_family::{C, CPP};
 pub(crate) use csharp::CSHARP;
+pub(crate) use dart::DART;
 pub(crate) use php::PHP;
 pub(crate) use ruby::RUBY;

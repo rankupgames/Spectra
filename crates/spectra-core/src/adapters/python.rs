@@ -20,7 +20,12 @@ impl LanguageAdapter for PythonAdapter {
         tree_sitter_python::LANGUAGE.into()
     }
 
-    fn classify(&self, node: SyntaxNode<'_>, scopes: &[Scope]) -> Option<&'static str> {
+    fn classify(
+        &self,
+        node: SyntaxNode<'_>,
+        _source: &[u8],
+        scopes: &[Scope],
+    ) -> Option<&'static str> {
         match node.kind() {
             "class_definition" => Some("class"),
             "function_definition" => Some(if inside_type(scopes) {

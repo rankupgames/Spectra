@@ -22,7 +22,12 @@ impl LanguageAdapter for RustAdapter {
         tree_sitter_rust::LANGUAGE.into()
     }
 
-    fn classify(&self, node: SyntaxNode<'_>, scopes: &[Scope]) -> Option<&'static str> {
+    fn classify(
+        &self,
+        node: SyntaxNode<'_>,
+        _source: &[u8],
+        scopes: &[Scope],
+    ) -> Option<&'static str> {
         match node.kind() {
             "mod_item" => Some("module"),
             "struct_item" => Some("struct"),

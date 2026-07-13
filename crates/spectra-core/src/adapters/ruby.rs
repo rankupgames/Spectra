@@ -23,7 +23,12 @@ impl LanguageAdapter for RubyAdapter {
         tree_sitter_ruby::LANGUAGE.into()
     }
 
-    fn classify(&self, node: SyntaxNode<'_>, scopes: &[Scope]) -> Option<&'static str> {
+    fn classify(
+        &self,
+        node: SyntaxNode<'_>,
+        _source: &[u8],
+        scopes: &[Scope],
+    ) -> Option<&'static str> {
         match node.kind() {
             "class" => Some("class"),
             "module" => Some("module"),
