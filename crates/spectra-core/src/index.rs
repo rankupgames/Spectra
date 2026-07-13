@@ -365,7 +365,7 @@ fn visit(
             parent: Some(context.parent),
         });
         next.parent = id;
-        if matches!(mapped_kind, "function" | "method") {
+        if matches!(mapped_kind, "function" | "method" | "kernel") {
             next.owner = Some(id);
         }
         for relation in adapter.relations(syntax, source) {
@@ -462,6 +462,7 @@ fn assemble(cache: &IndexCache) -> Result<CodeIndex> {
             "file"
                 | "function"
                 | "method"
+                | "kernel"
                 | "class"
                 | "interface"
                 | "trait"
@@ -480,11 +481,26 @@ fn assemble(cache: &IndexCache) -> Result<CodeIndex> {
     for (path, file) in &cache.files {
         for pending in &file.edges {
             let source = ids[&(path.clone(), pending.source)];
-            match definitions
+            let candidates: Vec<_> = definitions
                 .get(&pending.target_name.to_ascii_lowercase())
                 .map(Vec::as_slice)
-            {
-                Some([target]) => {
+                .unwrap_or_default()
+                .iter()
+                .copied()
+                .filter(|target| definition_matches(&graph, *target, &pending.kind))
+                .collect();
+            let exact: Vec<_> = candidates
+                .iter()
+                .copied()
+                .filter(|target| graph.label(*target) == pending.target_name)
+                .collect();
+            let candidates = if exact.is_empty() {
+                &candidates
+            } else {
+                &exact
+            };
+            match candidates.as_slice() {
+                [target] => {
                     let kind = if pending.kind == "inherits" {
                         let source_kind = graph.kind(source);
                         let target_kind = graph.kind(*target);
@@ -500,7 +516,7 @@ fn assemble(cache: &IndexCache) -> Result<CodeIndex> {
                     };
                     graph.add_edge(source, *target, kind)?;
                 }
-                Some(candidates) if !candidates.is_empty() => {
+                candidates if !candidates.is_empty() => {
                     let boundary = graph.add_node("boundary", &format!("?{}", pending.target_name));
                     spans.insert(
                         boundary,
@@ -524,6 +540,20 @@ fn assemble(cache: &IndexCache) -> Result<CodeIndex> {
         qualified_names,
         version: INDEX_VERSION,
     })
+}
+
+fn definition_matches(graph: &PackedGraph, target: NodeId, edge_kind: &str) -> bool {
+    let kind = graph.kind(target);
+    match edge_kind {
+        "inherits" | "extends" | "implements" => matches!(
+            kind,
+            "class" | "interface" | "trait" | "struct" | "enum" | "type_alias"
+        ),
+        "calls" => matches!(kind, "function" | "method" | "kernel" | "class"),
+        "binds" => matches!(kind, "function" | "method" | "kernel"),
+        "renders" => kind == "component",
+        _ => true,
+    }
 }
 
 fn stable_hash(bytes: &[u8]) -> u64 {
@@ -669,6 +699,49 @@ mod tests {
         assert!(has_node(&file, "class", "App"));
         assert!(has_node(&file, "method", "run"));
         assert!(has_edge(&file, "inherits", "Base"));
+        assert!(has_edge(&file, "calls", "helper"));
+    }
+
+    #[test]
+    fn extracts_objective_c_protocols_implementations_messages_and_imports() {
+        let file = parsed(
+            "App.m",
+            "#import \"Helper.h\"\n@protocol Run\n- (void)run;\n@end\n@interface Base : NSObject\n@end\n@interface App : Base <Run>\n- (void)run;\n@end\n@implementation App\n- (void)run { [self helper]; }\n- (void)helper {}\n@end\n",
+        );
+        assert!(has_node(&file, "interface", "Run"));
+        assert!(has_node(&file, "class", "App"));
+        assert!(has_node(&file, "impl", "App"));
+        assert!(has_node(&file, "method", "run"));
+        assert!(has_edge(&file, "imports", "Helper.h"));
+        assert!(has_edge(&file, "inherits", "Base"));
+        assert!(has_edge(&file, "inherits", "Run"));
+        assert!(has_edge(&file, "implements", "App"));
+        assert!(has_edge(&file, "calls", "helper"));
+    }
+
+    #[test]
+    fn extracts_cuda_kernels_launches_includes_and_calls() {
+        let file = parsed(
+            "render.cu",
+            "#include \"helper.cuh\"\n__device__ void helper() {}\n__global__ void render() { helper(); }\nvoid launch() { render<<<1, 1>>>(); }\n",
+        );
+        assert!(has_node(&file, "kernel", "render"));
+        assert!(has_node(&file, "function", "helper"));
+        assert!(has_node(&file, "function", "launch"));
+        assert!(has_edge(&file, "imports", "helper.cuh"));
+        assert!(has_edge(&file, "calls", "helper"));
+        assert!(has_edge(&file, "calls", "render"));
+    }
+
+    #[test]
+    fn extracts_metal_entry_points_includes_and_calls() {
+        let file = parsed(
+            "shader.metal",
+            "#include <metal_stdlib>\nusing namespace metal;\nfloat helper() { return 1.0; }\nkernel void shade(device float *data [[buffer(0)]]) { helper(); }\n",
+        );
+        assert!(has_node(&file, "kernel", "shade"));
+        assert!(has_node(&file, "function", "helper"));
+        assert!(has_edge(&file, "imports", "metal_stdlib"));
         assert!(has_edge(&file, "calls", "helper"));
     }
 
@@ -873,7 +946,7 @@ function fetchPost() {}
     #[test]
     fn language_registry_is_the_discovery_contract() {
         let supported = adapters::supported_languages();
-        assert_eq!(supported.len(), 21);
+        assert_eq!(supported.len(), 24);
         for path in [
             "lib.rs",
             "app.tsx",
@@ -896,6 +969,9 @@ function fetchPost() {}
             "Page.vue",
             "Page.astro",
             "page.liquid",
+            "App.m",
+            "render.cu",
+            "shader.metal",
         ] {
             assert!(adapters::for_path(Path::new(path)).is_some(), "{path}");
         }
@@ -1092,11 +1168,77 @@ function handleClick() {}
             (page, handler, "binds"),
             (page, handler, "contains"),
         ] {
-            assert!(index.graph.edges.iter().any(|edge| {
-                edge.source == source
-                    && edge.target == target
-                    && index.graph.atom(edge.kind) == kind
-            }));
+            assert!(
+                index.graph.edges.iter().any(|edge| {
+                    edge.source == source
+                        && edge.target == target
+                        && index.graph.atom(edge.kind) == kind
+                }),
+                "missing {kind} edge from {} to {}",
+                index.graph.label(source),
+                index.graph.label(target)
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refresh_resolves_objective_c_implementations_and_cuda_launches() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "spectra-native-adapter-test-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("App.m"),
+            "@protocol Run\n- (void)run;\n@end\n@interface Base\n@end\n@interface App : Base <Run>\n@end\n@implementation App\n- (void)run {}\n@end\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("render.cu"),
+            "__global__ void render() {}\nvoid launch() { render<<<1, 1>>>(); }\n",
+        )
+        .unwrap();
+
+        let (index, report) = CodeIndex::refresh(&root).unwrap();
+        assert_eq!(report.files, 2);
+        let find = |kind: &str, label: &str| {
+            index
+                .graph
+                .nodes
+                .iter()
+                .find(|node| {
+                    index.graph.kind(node.id) == kind && index.graph.atom(node.label) == label
+                })
+                .unwrap()
+                .id
+        };
+        let app = find("class", "App");
+        let implementation = find("impl", "App");
+        let base = find("class", "Base");
+        let protocol = find("interface", "Run");
+        let launch = find("function", "launch");
+        let kernel = find("kernel", "render");
+        for (source, target, kind) in [
+            (app, base, "extends"),
+            (app, protocol, "implements"),
+            (implementation, app, "implements"),
+            (launch, kernel, "calls"),
+        ] {
+            assert!(
+                index.graph.edges.iter().any(|edge| {
+                    edge.source == source
+                        && edge.target == target
+                        && index.graph.atom(edge.kind) == kind
+                }),
+                "missing {kind} edge from {} to {}",
+                index.graph.label(source),
+                index.graph.label(target)
+            );
         }
         fs::remove_dir_all(root).unwrap();
     }

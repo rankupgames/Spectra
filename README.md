@@ -18,7 +18,7 @@ Agent lifecycle ──adapter hooks──▶ immutable ledger ──▶ bounded 
 Instead of dumping source up front, Spectra lets the model see the shape of the system, choose an exact `path:start-end` anchor, and read code once it knows what it is looking for.
 
 > [!IMPORTANT]
-> Spectra is an early prototype. The v0.2 adapter registry currently supports Rust, TypeScript/TSX, JavaScript/JSX, Python, Go, Java, C, C++, C#, PHP, Ruby, Swift, Kotlin, Scala, Dart, Lua, Luau, Svelte, Vue, Astro, and Liquid; CodeGraph language parity is still in progress. Automatic topology setup supports eight local agents, while Lifecycle Ledger integration is currently limited to Codex. See [Project status](#project-status) before relying on it in production.
+> Spectra is an early prototype. The v0.2 adapter registry currently supports Rust, TypeScript/TSX, JavaScript/JSX, Python, Go, Java, C, C++, C#, PHP, Ruby, Swift, Kotlin, Scala, Dart, Lua, Luau, Svelte, Vue, Astro, Liquid, Objective-C, CUDA, and Metal; CodeGraph language parity is still in progress. Automatic topology setup supports eight local agents, while Lifecycle Ledger integration is currently limited to Codex. See [Project status](#project-status) before relying on it in production.
 
 The [agent support contract](docs/agent-support.md) tracks topology and Ledger support separately so an MCP integration is never mistaken for lifecycle coverage.
 
@@ -191,7 +191,7 @@ The internal graph kernel is domain-neutral:
 - adjacency indexes and invariant validation
 - code-specific `SourceSpan` data kept in a separate sidecar
 
-Every adapter maps its grammar into the same graph vocabulary. The current v0.2 packs cover Rust, TypeScript/TSX, JavaScript/JSX, Python, Go, Java, C, C++, C#, PHP, Ruby, Swift, Kotlin, Scala, Dart, Lua, Luau, Svelte, Vue, Astro, and Liquid, including structural symbols, containment, imports, calls, inheritance, and implementations where the language exposes them. Web components additionally parse embedded JavaScript or TypeScript, connect template events to script handlers, resolve rendered components, and model SvelteKit, Nuxt, and Astro page routes. Ambiguous targets remain explicit uncertain boundaries. Rendering condenses cycles, layers nodes, clusters related code, routes typed edges, and emits deterministic SVG and PNG artifacts.
+Every adapter maps its grammar into the same graph vocabulary. The current v0.2 packs cover Rust, TypeScript/TSX, JavaScript/JSX, Python, Go, Java, C, C++, C#, PHP, Ruby, Swift, Kotlin, Scala, Dart, Lua, Luau, Svelte, Vue, Astro, Liquid, Objective-C, CUDA, and Metal, including structural symbols, containment, imports, calls, inheritance, and implementations where the language exposes them. Web components additionally parse embedded JavaScript or TypeScript, connect template events to script handlers, resolve rendered components, and model SvelteKit, Nuxt, and Astro page routes. Native adapters connect Objective-C interfaces, protocols, implementations, and message sends, and distinguish CUDA and Metal entry-point kernels from ordinary functions. Ambiguous targets remain explicit uncertain boundaries. Rendering condenses cycles, layers nodes, clusters related code, routes typed edges, and emits deterministic SVG and PNG artifacts.
 
 The adapter contract, functional acceptance bar, and CodeGraph parity matrix are tracked in [Code adapters](docs/code-adapters.md).
 
@@ -226,7 +226,7 @@ The benchmark protocol, frozen prompts, raw evaluation data, and replay fixtures
 
 Implemented:
 
-- adapter-driven topology extraction and incremental indexing for Rust, TypeScript/TSX, JavaScript/JSX, Python, Go, Java, C, C++, C#, PHP, Ruby, Swift, Kotlin, Scala, Dart, Lua, Luau, Svelte, Vue, Astro, and Liquid
+- adapter-driven topology extraction and incremental indexing for Rust, TypeScript/TSX, JavaScript/JSX, Python, Go, Java, C, C++, C#, PHP, Ruby, Swift, Kotlin, Scala, Dart, Lua, Luau, Svelte, Vue, Astro, Liquid, Objective-C, CUDA, and Metal
 - embedded JavaScript/TypeScript bridges, component rendering and event bindings, and conventional SvelteKit, Nuxt, and Astro page routes
 - query-focused deterministic PNG and SVG rendering
 - bounded MCP image and anchor responses

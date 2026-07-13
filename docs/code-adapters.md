@@ -41,11 +41,14 @@ Core extraction, ecosystem routing, and language bridges may land separately, bu
 | Vue | `.vue` | Implemented, including embedded JS/TS | Calls, imports, component renders, event bindings | Nuxt page routes and script-setup bridges implemented |
 | Astro | `.astro` | Implemented, including frontmatter TS | Calls, imports, component renders, event bindings | Astro page routes and frontmatter bridges implemented |
 | Liquid | `.liquid` | Implemented over HTML structure | Render/include and output bindings | Template-to-snippet and output bridges implemented |
+| Objective-C | `.m`, `.mm` | Implemented | Calls, imports, inheritance, protocols, implementations, message sends | C/Objective-C header and implementation resolution implemented |
+| CUDA | `.cu`, `.cuh` | Implemented | Calls, includes, inheritance, kernel launches | C++-family definitions and CUDA kernels share the common resolver |
+| Metal | `.metal` | Implemented over the C++ grammar | Calls, includes, inheritance, shader entry points | C++-family definitions and Metal kernels share the common resolver |
 
-The common resolver links a target only when there is one matching definition. Multiple candidates produce a typed uncertain boundary, preserving ambiguity in the rendered topology. Conventional page routes use local `routes_to` edges, while embedded script symbols remain contained by their component and participate in normal cross-file resolution.
+The common resolver prefers exact-case definitions compatible with the edge type, then falls back to case-insensitive matching. Multiple eligible candidates produce a typed uncertain boundary, preserving ambiguity in the rendered topology. Conventional page routes use local `routes_to` edges, while embedded script symbols remain contained by their component and participate in normal cross-file resolution.
 
 ## Parity baseline
 
-The baseline is CodeGraph v1.3.0 as installed when v0.2 development began. Remaining families include Objective-C, R, Nix, Erlang, Solidity, Terraform/OpenTofu, Pascal/Delphi, ArkTS, Visual Basic .NET, CFML, COBOL, CUDA, and Metal.
+The baseline is CodeGraph v1.3.0 as installed when v0.2 development began. Remaining families include R, Nix, Erlang, Solidity, Terraform/OpenTofu, Pascal/Delphi, ArkTS, Razor, Visual Basic .NET, CFML/CFScript/CFQuery, COBOL, YAML, Twig, XML, and properties files. CUDA and Metal are C++ dialects in CodeGraph; Spectra uses dedicated adapters for their kernel semantics while preserving C++-family resolution.
 
 Parity is pinned to this baseline so a moving upstream language list cannot silently change the release gate. Later CodeGraph additions can be adopted deliberately.

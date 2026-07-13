@@ -131,7 +131,7 @@ pub fn render_svg(
         let is_anchor = anchors.contains_key(id);
         let radius = match kind {
             "trait" | "impl" => 25,
-            "function" | "method" => 12,
+            "function" | "method" | "kernel" => 12,
             "file" | "module" => 4,
             _ => 2,
         };

@@ -9,8 +9,12 @@ use super::{
 
 pub(crate) struct CAdapter;
 pub(crate) struct CppAdapter;
+pub(crate) struct CudaAdapter;
+pub(crate) struct MetalAdapter;
 pub(crate) static C: CAdapter = CAdapter;
 pub(crate) static CPP: CppAdapter = CppAdapter;
+pub(crate) static CUDA: CudaAdapter = CudaAdapter;
+pub(crate) static METAL: MetalAdapter = MetalAdapter;
 
 impl LanguageAdapter for CAdapter {
     fn id(&self) -> &'static str {
@@ -85,18 +89,100 @@ impl LanguageAdapter for CppAdapter {
     }
 
     fn relations(&self, node: SyntaxNode<'_>, source: &[u8]) -> Vec<Relation> {
-        let mut relations = include_relation(node, source);
-        if let Some(bases) = named_child_by_kind(node, "base_class_clause") {
-            relations.extend(
-                identifier_names(bases, source)
-                    .into_iter()
-                    .map(|target| Relation {
-                        kind: "inherits",
-                        target,
-                    }),
-            );
+        cpp_relations(node, source)
+    }
+}
+
+impl LanguageAdapter for CudaAdapter {
+    fn id(&self) -> &'static str {
+        "cuda"
+    }
+
+    fn extensions(&self) -> &'static [&'static str] {
+        &["cu", "cuh"]
+    }
+
+    fn language(&self, _path: &Path) -> Language {
+        tree_sitter_cuda::LANGUAGE.into()
+    }
+
+    fn classify(
+        &self,
+        node: SyntaxNode<'_>,
+        source: &[u8],
+        scopes: &[Scope],
+    ) -> Option<&'static str> {
+        if node.kind() == "function_definition" {
+            if declaration_has_keyword(node, source, "__global__") {
+                return Some("kernel");
+            }
+            return Some(if inside_type(scopes) {
+                "method"
+            } else {
+                "function"
+            });
         }
-        relations
+        classify_c_family(node, true)
+    }
+
+    fn label(&self, node: SyntaxNode<'_>, source: &[u8], mapped_kind: &str) -> Option<String> {
+        c_family_label(node, source, mapped_kind)
+    }
+
+    fn call_name(&self, node: SyntaxNode<'_>, source: &[u8]) -> Option<String> {
+        c_family_call(node, source)
+    }
+
+    fn relations(&self, node: SyntaxNode<'_>, source: &[u8]) -> Vec<Relation> {
+        cpp_relations(node, source)
+    }
+}
+
+impl LanguageAdapter for MetalAdapter {
+    fn id(&self) -> &'static str {
+        "metal"
+    }
+
+    fn extensions(&self) -> &'static [&'static str] {
+        &["metal"]
+    }
+
+    fn language(&self, _path: &Path) -> Language {
+        tree_sitter_cpp::LANGUAGE.into()
+    }
+
+    fn classify(
+        &self,
+        node: SyntaxNode<'_>,
+        source: &[u8],
+        scopes: &[Scope],
+    ) -> Option<&'static str> {
+        if node.kind() == "function_definition" {
+            if ["kernel", "vertex", "fragment"]
+                .into_iter()
+                .any(|keyword| declaration_has_keyword(node, source, keyword))
+            {
+                return Some("kernel");
+            }
+            return Some(if inside_type(scopes) {
+                "method"
+            } else {
+                "function"
+            });
+        }
+        classify_c_family(node, true)
+    }
+
+    fn label(&self, node: SyntaxNode<'_>, source: &[u8], mapped_kind: &str) -> Option<String> {
+        c_family_label(node, source, mapped_kind)
+    }
+
+    fn call_name(&self, node: SyntaxNode<'_>, source: &[u8]) -> Option<String> {
+        c_family_call(node, source)
+    }
+
+    fn relations(&self, node: SyntaxNode<'_>, source: &[u8]) -> Vec<Relation> {
+        cpp_relations(node, source)
     }
 }
 
@@ -113,11 +199,15 @@ fn classify_c_family(node: SyntaxNode<'_>, cpp: bool) -> Option<&'static str> {
     }
 }
 
-fn c_family_label(node: SyntaxNode<'_>, source: &[u8], mapped_kind: &str) -> Option<String> {
+pub(super) fn c_family_label(
+    node: SyntaxNode<'_>,
+    source: &[u8],
+    mapped_kind: &str,
+) -> Option<String> {
     if mapped_kind == "import" {
         return Some(truncate(text(node, source).trim(), 72));
     }
-    if matches!(mapped_kind, "function" | "method" | "type_alias") {
+    if matches!(mapped_kind, "function" | "method" | "kernel" | "type_alias") {
         return node
             .child_by_field_name("declarator")
             .and_then(|declarator| declarator_name(declarator, source));
@@ -144,13 +234,13 @@ fn declarator_name(node: SyntaxNode<'_>, source: &[u8]) -> Option<String> {
         .find_map(|child| declarator_name(child, source))
 }
 
-fn c_family_call(node: SyntaxNode<'_>, source: &[u8]) -> Option<String> {
+pub(super) fn c_family_call(node: SyntaxNode<'_>, source: &[u8]) -> Option<String> {
     (node.kind() == "call_expression")
         .then(|| call_target(node, "function", source))
         .flatten()
 }
 
-fn include_relation(node: SyntaxNode<'_>, source: &[u8]) -> Vec<Relation> {
+pub(super) fn include_relation(node: SyntaxNode<'_>, source: &[u8]) -> Vec<Relation> {
     if node.kind() != "preproc_include" {
         return Vec::new();
     }
@@ -170,4 +260,34 @@ fn include_relation(node: SyntaxNode<'_>, source: &[u8]) -> Vec<Relation> {
             }]
         })
         .unwrap_or_default()
+}
+
+fn cpp_relations(node: SyntaxNode<'_>, source: &[u8]) -> Vec<Relation> {
+    let mut relations = include_relation(node, source);
+    if let Some(bases) = named_child_by_kind(node, "base_class_clause") {
+        relations.extend(
+            identifier_names(bases, source)
+                .into_iter()
+                .map(|target| Relation {
+                    kind: "inherits",
+                    target,
+                }),
+        );
+    }
+    relations
+}
+
+fn declaration_has_keyword(node: SyntaxNode<'_>, source: &[u8], keyword: &str) -> bool {
+    let end = node
+        .child_by_field_name("declarator")
+        .map(|declarator| declarator.start_byte())
+        .unwrap_or(node.end_byte());
+    source
+        .get(node.start_byte()..end)
+        .and_then(|prefix| std::str::from_utf8(prefix).ok())
+        .is_some_and(|prefix| {
+            prefix
+                .split(|character: char| !(character == '_' || character.is_alphanumeric()))
+                .any(|word| word == keyword)
+        })
 }

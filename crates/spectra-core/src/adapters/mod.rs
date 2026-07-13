@@ -10,6 +10,7 @@ mod java;
 mod javascript;
 mod kotlin;
 mod lua_family;
+mod objective_c;
 mod php;
 mod python;
 mod ruby;
@@ -24,6 +25,7 @@ pub(crate) use java::JAVA;
 pub(crate) use javascript::JAVASCRIPT;
 pub(crate) use kotlin::KOTLIN;
 pub(crate) use lua_family::{LUA, LUAU};
+pub(crate) use objective_c::OBJECTIVE_C;
 pub(crate) use python::PYTHON;
 pub(crate) use rust::RUST;
 pub(crate) use scala::SCALA;
@@ -31,7 +33,7 @@ pub(crate) use swift::SWIFT;
 pub(crate) use typescript::TYPESCRIPT;
 pub(crate) use web::{ASTRO, LIQUID, SVELTE, VUE};
 
-static ADAPTERS: [&dyn LanguageAdapter; 21] = [
+static ADAPTERS: [&dyn LanguageAdapter; 24] = [
     &RUST,
     &TYPESCRIPT,
     &JAVASCRIPT,
@@ -53,6 +55,9 @@ static ADAPTERS: [&dyn LanguageAdapter; 21] = [
     &VUE,
     &ASTRO,
     &LIQUID,
+    &OBJECTIVE_C,
+    &CUDA,
+    &METAL,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -140,6 +145,7 @@ pub(crate) trait LanguageAdapter: Sync {
                 | "impl"
                 | "function"
                 | "method"
+                | "kernel"
         )
     }
 }
@@ -286,7 +292,7 @@ pub(crate) fn inside_type(scopes: &[Scope]) -> bool {
     scopes
         .iter()
         .rev()
-        .take_while(|scope| !matches!(scope.kind, "function" | "method"))
+        .take_while(|scope| !matches!(scope.kind, "function" | "method" | "kernel"))
         .any(|scope| {
             matches!(
                 scope.kind,
@@ -302,7 +308,7 @@ pub(crate) fn truncate(value: &str, max: usize) -> String {
         format!("{}…", value.chars().take(max - 1).collect::<String>())
     }
 }
-pub(crate) use c_family::{C, CPP};
+pub(crate) use c_family::{C, CPP, CUDA, METAL};
 pub(crate) use csharp::CSHARP;
 pub(crate) use dart::DART;
 pub(crate) use php::PHP;
