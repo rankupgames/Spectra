@@ -202,7 +202,10 @@ fn set_executable(_path: &Path) -> Result<(), BoxError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static NEXT_TEMP_ROOT: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn install_is_idempotent_and_remove_preserves_user_hook() {
@@ -280,6 +283,10 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("spectra-git-hooks-{}-{id}", std::process::id()))
+        let sequence = NEXT_TEMP_ROOT.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "spectra-git-hooks-{}-{id}-{sequence}",
+            std::process::id()
+        ))
     }
 }
