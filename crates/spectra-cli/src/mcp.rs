@@ -666,6 +666,10 @@ mod tests {
     fn server_pins_the_codegraph_parity_tool_contract() {
         let server = SpectraServer::default();
         assert_eq!(server.get_info().server_info.name, "spectra");
+        assert_eq!(
+            server.get_info().server_info.version,
+            env!("CARGO_PKG_VERSION")
+        );
         let tools = SpectraServer::tool_router().list_all();
         let names = tools
             .iter()

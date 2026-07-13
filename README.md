@@ -3,6 +3,7 @@
 **A smaller, more useful memory for local AI coding agents.**
 
 [![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-CE412B?logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![Version: 0.2.0](https://img.shields.io/badge/Version-0.2.0-38BDF8.svg)](https://github.com/rankupgames/Spectra/releases/tag/v0.2.0)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22C55E.svg)](LICENSE)
 [![Status: Prototype](https://img.shields.io/badge/Status-Prototype-F59E0B.svg)](#project-status)
 
@@ -18,7 +19,7 @@ Agent lifecycle ──adapter hooks──▶ immutable ledger ──▶ bounded 
 Instead of dumping source up front, Spectra lets the model see the shape of the system, choose an exact `path:start-end` anchor, and read code once it knows what it is looking for.
 
 > [!IMPORTANT]
-> Spectra is an early prototype. The v0.2 registry covers the complete CodeGraph v1.3.0 language and extension surface with 39 adapters, and the matching framework/bridge packs are implemented; representative-repository parity validation is still in progress. Automatic topology setup supports eight local agents, while Lifecycle Ledger integration is currently limited to Codex. See [Project status](#project-status) before relying on it in production.
+> Spectra is an early prototype. The v0.2 registry covers the complete CodeGraph v1.3.0 language and extension surface with 39 adapters, the matching framework/bridge packs are implemented, and the pinned representative-repository gates pass. Automatic topology setup supports eight local agents, while Lifecycle Ledger integration is currently limited to Codex. See [Project status](#project-status) before relying on it in production.
 
 The [agent support contract](docs/agent-support.md) tracks topology and Ledger support separately so an MCP integration is never mistaken for lifecycle coverage.
 
@@ -37,8 +38,9 @@ Most code-context tools answer with source and explanation together. That can be
 
 | Evaluation | Result |
 | --- | ---: |
-| Median provider-input reduction | **89.7%** |
-| Composite-quality retention | **98.3%** |
+| Median provider-input reduction | **88.3%** |
+| Composite recall-proxy retention | **118.0%** |
+| Expected-anchor recall | **85.2%** (CodeGraph: 68.5%) |
 | Ledger median estimated-token reduction | **93.4%** |
 | Ledger fact retention | **100%** |
 | Maximum Ledger projection | **57 tokens** |
@@ -47,7 +49,7 @@ These numbers come from nine frozen prompts across pinned ripgrep, Tokio, and ru
 
 ## Quickstart
 
-Spectra does not have packaged binaries yet, but Cargo can install the current release candidate directly from GitHub:
+Spectra does not have prebuilt binaries yet, but Cargo can install the tagged v0.2.0 release directly from GitHub:
 
 ### Requirements
 
@@ -60,7 +62,7 @@ Any MCP client can also run `spectra serve --mcp` manually.
 ### 1. Install Spectra
 
 ```sh
-cargo install --git https://github.com/rankupgames/Spectra.git --bin spectra --locked
+cargo install --git https://github.com/rankupgames/Spectra.git --tag v0.2.0 --bin spectra --locked
 ```
 
 ### 2. Connect your agents
@@ -102,16 +104,16 @@ Or render a map directly:
 spectra map "how does request routing reach persistence" --path /path/to/project
 ```
 
-Spectra returns a PNG and compact metadata:
+Spectra returns a PNG and compact semantic metadata:
 
 ```text
-N1=src/router.rs:18-47
-N2=src/store.rs:9-31
+N1=method impl Router::dispatch @ src/router.rs:18-47
+N2=method impl Store::save @ src/store.rs:9-31
+flow N1 -calls-> N2
 nodes=42 truncated=false index=v4
-autosync=active pending=0
 ```
 
-From there, the agent can pick an anchor and open the part of the source that actually matters.
+From there, the agent can pick an anchor and open the part of the source that actually matters. MCP responses append watcher health as `autosync=active|degraded pending=N`; direct CLI maps omit that server-only line.
 
 ## What happens behind the scenes
 
@@ -265,17 +267,17 @@ Implemented:
 - automatic Codex lifecycle-hook installation
 - append-only State Machine Ledger with replay, recovery, redaction, concurrency control, and bounded projection
 - deterministic, provider-backed, and recorded-hook regression suites
+- pinned real-repository parity gates covering framework routes and multimodal topology quality
 
 Not yet implemented:
 
-- measured representative-repository evaluation and any adapter gaps it exposes
 - non-Codex Ledger adapters without a verified lifecycle protocol and recorded-wire replay
 - complete unified-shell interception
 - packaged release binaries and automatic updater
 - Tauri observability UI
 - public graph-extension SDK
 
-The v0.2 milestone is functional CodeGraph language parity: adapters, ecosystem routing, cross-language bridges, and measured real-repository coverage. Packaged installers that do not require a Rust toolchain follow that work.
+The v0.2 release delivers functional CodeGraph language parity: adapters, ecosystem routing, cross-language bridges, CodeGraph-parity MCP queries, seamless autosync, semantic map metadata, and measured real-repository coverage. Packaged installers that do not require a Rust toolchain follow that work.
 
 ## Contributing
 
