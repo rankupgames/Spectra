@@ -1,0 +1,80 @@
+{
+  "schema_version": 2,
+  "repositories": [
+    {
+      "name": "ripgrep",
+      "url": "https://github.com/BurntSushi/ripgrep.git",
+      "commit": "d5b85d44057ff729a89be9c6549958c45d95aa99",
+      "prompts": [
+        {
+          "id": "rg-cli-args",
+          "question": "How are command-line arguments parsed into the high-level configuration used by ripgrep?",
+          "expected_concepts": ["low-level flags", "HiArgs conversion", "special modes"],
+          "expected_anchors": ["crates/core/flags/parse.rs:parse", "crates/core/flags/hiargs.rs:HiArgs::from_low_args"]
+        },
+        {
+          "id": "rg-search",
+          "question": "How does the single-threaded search path walk haystacks and execute the configured search worker?",
+          "expected_concepts": ["walk_builder", "haystack construction", "SearchWorker::search"],
+          "expected_anchors": ["crates/core/main.rs:search", "crates/core/search.rs:SearchWorker::search"]
+        },
+        {
+          "id": "rg-ignore-walk",
+          "question": "How are ignore rules carried through recursive directory walking?",
+          "expected_concepts": ["WalkBuilder", "Ignore parent chain", "directory events"],
+          "expected_anchors": ["crates/ignore/src/walk.rs:Walk", "crates/ignore/src/dir.rs:Ignore::add_parents"]
+        }
+      ]
+    },
+    {
+      "name": "tokio",
+      "url": "https://github.com/tokio-rs/tokio.git",
+      "commit": "33f46a5395cc25b8bf53bca71e972df1c9aa962a",
+      "prompts": [
+        {
+          "id": "tokio-scheduler",
+          "question": "How does a spawned task enter the multi-thread scheduler and eventually get polled by a worker?",
+          "expected_concepts": ["spawn_inner", "schedule_task", "run_task"],
+          "expected_anchors": ["tokio/src/task/spawn.rs:spawn_inner", "tokio/src/runtime/scheduler/multi_thread/worker.rs:schedule_task", "tokio/src/runtime/scheduler/multi_thread/worker.rs:run_task"]
+        },
+        {
+          "id": "tokio-io",
+          "question": "How does Tokio register an I/O resource with the reactor and drive readiness events?",
+          "expected_concepts": ["registration", "reactor driver", "readiness"],
+          "expected_anchors": ["tokio/src/runtime/io/registration.rs:Registration", "tokio/src/runtime/io/driver.rs:Driver"]
+        },
+        {
+          "id": "tokio-time",
+          "question": "How does a sleep future reach the timer driver and become ready after its deadline?",
+          "expected_concepts": ["Sleep::new_timeout", "TimerEntry::poll_elapsed", "Driver::park_internal"],
+          "expected_anchors": ["tokio/src/time/sleep.rs:sleep", "tokio/src/runtime/time/entry.rs:poll_elapsed", "tokio/src/runtime/time/mod.rs:park_internal"]
+        }
+      ]
+    },
+    {
+      "name": "rust-analyzer",
+      "url": "https://github.com/rust-lang/rust-analyzer.git",
+      "commit": "afdf9295257f4de1ada10704c9c306c357329c58",
+      "prompts": [
+        {
+          "id": "ra-lsp-dispatch",
+          "question": "How does rust-analyzer dispatch an incoming LSP request onto the appropriate execution thread and return a response?",
+          "expected_concepts": ["RequestDispatcher", "thread intent", "GlobalState response"],
+          "expected_anchors": ["crates/rust-analyzer/src/handlers/dispatch.rs:RequestDispatcher::on", "crates/rust-analyzer/src/handlers/dispatch.rs:on_with_thread_intent"]
+        },
+        {
+          "id": "ra-analysis-change",
+          "question": "How does a source change enter AnalysisHost and update the incremental analysis database?",
+          "expected_concepts": ["AnalysisHost", "apply_change", "RootDatabase"],
+          "expected_anchors": ["crates/ide/src/lib.rs:AnalysisHost::apply_change", "crates/ide-db/src/lib.rs:RootDatabase"]
+        },
+        {
+          "id": "ra-completion",
+          "question": "How does an editor completion request reach completion context analysis and collect completion items?",
+          "expected_concepts": ["Analysis::completions", "CompletionContext", "CompletionAnalysis"],
+          "expected_anchors": ["crates/ide/src/lib.rs:Analysis::completions", "crates/ide-completion/src/lib.rs:completions"]
+        }
+      ]
+    }
+  ]
+}

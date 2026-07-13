@@ -1,0 +1,273 @@
+# Spectra
+
+**A smaller, more useful memory for local AI coding agents.**
+
+[![Rust 1.87+](https://img.shields.io/badge/Rust-1.87%2B-CE412B?logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-22C55E.svg)](LICENSE)
+[![Status: Prototype](https://img.shields.io/badge/Status-Prototype-F59E0B.svg)](#project-status)
+
+AI coding agents are good at working with code. They are less good at remembering a whole codebase without repeatedly loading file trees, source dumps, terminal logs, and old conversation into context.
+
+Spectra is an experiment in fixing that. It gives an agent two things: a visual map of the codebase and a small, durable record of what has already happened. The goal is simple: spend fewer tokens rediscovering context, and more of them doing the actual work.
+
+```text
+Rust repository ──tree-sitter──▶ topology graph ──▶ PNG map + exact anchors
+Agent lifecycle ──adapter hooks──▶ immutable ledger ──▶ bounded state context
+```
+
+Instead of dumping source up front, Spectra lets the model see the shape of the system, choose an exact `path:start-end` anchor, and read code once it knows what it is looking for.
+
+> [!IMPORTANT]
+> Spectra is an early prototype. The current code adapter supports Rust, and the automatic agent integration targets Codex. See [Project status](#project-status) before relying on it in production.
+
+Codex is only the first integration we could test locally—not the intended boundary of the project. Automatic setup for Claude Code, Cursor, OpenCode, Hermes Agent, Gemini CLI, Antigravity, and Kiro is the next milestone. The [agent support contract](docs/agent-support.md) tracks topology and Ledger support separately.
+
+## Why Spectra?
+
+Most code-context tools answer with source and explanation together. That can be useful, but it also means paying for the same code again when the conversation moves on. Spectra separates finding the right code from reading it:
+
+- **See the system first.** Spectra turns the relevant part of the architecture into a deterministic 1536×1024 map.
+- **Read with a purpose.** Every visual ID points back to an exact file and line range.
+- **Keep the answer small.** Maps show 48 nodes by default and never more than 96.
+- **Stay current.** Changed, added, and deleted Rust files are refreshed before a map is returned.
+- **Remember outcomes, not noise.** The Ledger keeps edits, test results, and blockers without saving full conversations or terminal output.
+- **Keep it local.** Parsing, indexing, rendering, selection, and replay all happen on your machine.
+
+### Prototype results
+
+| Evaluation | Result |
+| --- | ---: |
+| Median provider-input reduction vs. CodeGraph | **89.7%** |
+| CodeGraph composite-quality retention | **98.3%** |
+| Ledger median estimated-token reduction | **93.4%** |
+| Ledger fact retention | **100%** |
+| Maximum Ledger projection | **57 tokens** |
+
+These numbers come from nine frozen prompts across pinned ripgrep, Tokio, and rust-analyzer repositories using Grok 4.5. They are encouraging, but they are still prototype results—not a promise that every model and repository will behave the same way. The reproducible methodology, prompts, and limitations are documented in the [benchmark protocol](benchmarks/README.md). Generated result artifacts stay local and are not committed.
+
+## Try it from source
+
+Spectra does not have packaged releases yet. The steps below assume you already have a local clone of this repository. A public one-command installer will replace this section once the repository and signed release artifacts are available.
+
+### Requirements
+
+- Rust 1.87 or newer
+- Codex with lifecycle-hook support for the automatic setup shown below
+- A Rust repository to map
+
+Other MCP clients can already run `spectra serve --mcp` manually. Their one-command installers and Ledger adapters are still being built.
+
+### 1. Build the CLI from this checkout
+
+```sh
+cargo install --path crates/spectra-cli --bin spectra --locked
+```
+
+### 2. Connect it to Codex
+
+```sh
+spectra install
+```
+
+Restart Codex, open `/hooks`, and review the **Spectra context ledger** hook once. Codex asks you to trust non-managed hooks rather than quietly running them, which is a good safety boundary.
+
+Confirm the installation:
+
+```sh
+spectra status
+```
+
+Expected output:
+
+```text
+Codex: MCP=current, Ledger hooks=current
+```
+
+After that, there is nothing to babysit. Spectra creates project data when it is first needed and checks for changes before every map. You do not need to run a daemon, remember a `sync` command, or initialize each repository by hand.
+
+### 3. Use it
+
+Ask your agent an architecture or navigation question, for example:
+
+```text
+Use Spectra to map how request routing reaches persistence.
+```
+
+Or render a map directly:
+
+```sh
+spectra map "how does request routing reach persistence" --path /path/to/project
+```
+
+Spectra returns a PNG and compact metadata:
+
+```text
+N1=src/router.rs:18-47
+N2=src/store.rs:9-31
+nodes=42 truncated=false index=v1
+```
+
+From there, the agent can pick an anchor and open the part of the source that actually matters.
+
+## What happens behind the scenes
+
+Normal use creates a project-local `.spectra/` directory containing generated state:
+
+```text
+.spectra/
+├── index-v1.json          incremental code index
+├── ledger-v1.jsonl        append-only context ledger
+└── artifacts/             generated PNG and SVG maps
+```
+
+Whenever an agent asks for a map, Spectra:
+
+1. Traverses the repository while respecting `.gitignore`.
+2. Reuses unchanged file fragments and reparses changed Rust files.
+3. Resolves high-confidence structure and relationships.
+4. Marks uncertain calls as dashed boundaries instead of presenting guesses as facts.
+5. Selects and renders a query-focused subgraph.
+6. Records the synchronization and map outcome in the Ledger.
+
+On Codex, the Ledger also notices supported approvals, `apply_patch` edits, verification commands, and turn completion. When a new session or prompt begins, the agent receives a short state projection instead of a replay of everything Spectra observed.
+
+## CLI reference
+
+```text
+spectra install [--agent codex] [--dry-run]
+spectra status [--agent codex]
+spectra uninstall [--agent codex] [--dry-run]
+
+spectra init [PATH]
+spectra map <QUERY> [--path PATH] [--max-nodes 1..96] [--out DIR]
+spectra serve --mcp
+```
+
+`spectra init` is an optional eager-indexing command for diagnostics and benchmarks. It is not required during ordinary use.
+
+The installer is idempotent and ownership-aware: it updates stale Spectra registrations, preserves unrelated hooks, and refuses to overwrite or remove a foreign MCP entry named `spectra`.
+
+## MCP interface
+
+Spectra exposes one stdio MCP tool:
+
+```text
+spectra_map(query, project_path?, max_nodes?)
+```
+
+Its response contains an `image/png` content block followed by compact anchor metadata. It never includes source bodies.
+
+Automatic configuration is recommended. For a manual setup, register an MCP server named `spectra` that runs:
+
+```text
+/absolute/path/to/spectra serve --mcp
+```
+
+Equivalent Codex configuration:
+
+```toml
+[mcp_servers.spectra]
+command = "/absolute/path/to/spectra"
+args = ["serve", "--mcp"]
+```
+
+## Architecture
+
+The workspace is intentionally split into two small layers:
+
+- **`spectra-core`:** packed graph primitives, Rust extraction and resolution, deterministic selection and rendering, incremental indexing, and the State Machine Ledger.
+- **`spectra`:** CLI commands, stdio MCP transport, Codex installation, lifecycle-hook translation, and benchmark runners.
+
+The internal graph kernel is domain-neutral:
+
+- contiguous `NodeId` and `EdgeId` arrays
+- interned `AtomId` values
+- typed scalar attributes
+- adjacency indexes and invariant validation
+- code-specific `SourceSpan` data kept in a separate sidecar
+
+The Rust adapter extracts files, modules, imports, structs, enums, traits, implementations, functions, methods, containment, trait implementations, and high-confidence static calls. Rendering condenses cycles, layers nodes, clusters related code, routes typed edges, and emits deterministic SVG and PNG artifacts.
+
+See the [Ledger design and maintenance boundaries](docs/state-machine-ledger-prototype.md) for the state-machine contract.
+
+## Privacy and safety
+
+Spectra should not become another transcript database. It deliberately keeps less:
+
+- Source bodies are excluded from topology responses.
+- Prompts, assistant messages, patch bodies, and terminal output bodies are not written to the Ledger.
+- Credential-shaped values are redacted before persistence.
+- Hook retries use correlation IDs so immutable events are not duplicated.
+- Cross-process transactions serialize concurrent Ledger writers.
+- Malformed or unsupported hook events fail open and cannot block the agent loop.
+- The `.env` file and `.spectra/` runtime data are ignored by Git.
+
+Codex currently documents incomplete hook coverage for richer unified shell execution. Spectra records only supported lifecycle events and does not claim to intercept every OS process or terminal operation.
+
+## Development and verification
+
+```sh
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo build --release --workspace
+```
+
+The benchmark protocol, frozen prompts, raw evaluation data, and replay fixtures live under [`benchmarks/`](benchmarks/README.md).
+
+## Project status
+
+Implemented:
+
+- Rust topology extraction and incremental indexing
+- query-focused deterministic PNG and SVG rendering
+- bounded MCP image and anchor responses
+- automatic Codex MCP and lifecycle-hook installation
+- append-only State Machine Ledger with replay, recovery, redaction, concurrency control, and bounded projection
+- deterministic, provider-backed, and recorded-hook regression suites
+
+Not yet implemented:
+
+- non-Rust language adapters
+- integrations for coding agents other than Codex
+- complete unified-shell interception
+- packaged release binaries and automatic updater
+- Tauri observability UI
+- public graph-extension SDK
+
+The next release milestone is the [multi-agent adapter matrix](docs/agent-support.md), bringing the same low-maintenance setup to more local coding agents.
+
+## Contributing
+
+Spectra is young, and thoughtful help is welcome. Small, focused pull requests are much easier to review than sweeping rewrites. Please keep features modular, preserve deterministic output, and do not add source or terminal bodies to model-facing payloads. New dependencies need a quick maintenance and release-health check before they come in.
+
+Before opening a pull request, run the full verification commands above and include regression evidence for changes affecting selection, rendering, indexing, installation, or the Ledger.
+
+## Support Spectra
+
+If Spectra saves you some tokens, time, or frustration, and you would like to help fund the next round of work, you can send a SOL donation here:
+
+**Network:** Solana Mainnet  
+**Asset:** Native SOL  
+**Recipient:**
+
+```text
+5bK9UNxJoaENxTYh2ZFMpuhuu8iA2MNfBoWGMzrshH96
+```
+
+[Verify the address on Solana Explorer](https://explorer.solana.com/address/5bK9UNxJoaENxTYh2ZFMpuhuu8iA2MNfBoWGMzrshH96)
+
+If your wallet supports Solana Pay, this amount-free request lets you choose the donation amount:
+
+```text
+solana:5bK9UNxJoaENxTYh2ZFMpuhuu8iA2MNfBoWGMzrshH96?label=Spectra&message=Support%20Spectra%20development
+```
+
+> [!CAUTION]
+> Send only native SOL on the Solana network. Always verify the entire recipient address in your wallet before confirming a transaction. Cryptocurrency transfers are irreversible.
+
+No pressure, of course. Using the project, reporting a bug, or sharing a benchmark is valuable too. Thank you for helping Spectra grow in the open.
+
+## License
+
+Spectra is available under the [MIT License](LICENSE).

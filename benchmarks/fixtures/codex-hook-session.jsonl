@@ -1,0 +1,10 @@
+{"session_id":"backtest-session","turn_id":"turn-1","hook_event_name":"SessionStart","source":"startup","cwd":"$PROJECT"}
+{"session_id":"backtest-session","turn_id":"turn-1","hook_event_name":"PermissionRequest","cwd":"$PROJECT","tool_name":"apply_patch","tool_input":{"command":"*** Update File: src/lib.rs\n"}}
+{"session_id":"backtest-session","turn_id":"turn-1","hook_event_name":"PostToolUse","cwd":"$PROJECT","tool_name":"apply_patch","tool_use_id":"edit-1","tool_input":{"command":"*** Update File: src/lib.rs\n"},"tool_response":{"output":"Done"}}
+{"session_id":"backtest-session","turn_id":"turn-1","hook_event_name":"PostToolUse","cwd":"$PROJECT","tool_name":"apply_patch","tool_use_id":"edit-1","tool_input":{"command":"*** Update File: src/lib.rs\n"},"tool_response":{"output":"Done"}}
+{"session_id":"backtest-session","turn_id":"turn-1","hook_event_name":"PostToolUse","cwd":"$PROJECT","tool_name":"Bash","tool_use_id":"check-1","tool_input":{"command":"cargo test --workspace"},"tool_response":{"exit_code":101,"output":"test failed"}}
+{"session_id":"backtest-session","turn_id":"turn-2","hook_event_name":"PermissionRequest","cwd":"$PROJECT","tool_name":"apply_patch","tool_input":{"command":"*** Update File: src/lib.rs\n"}}
+{"session_id":"backtest-session","turn_id":"turn-2","hook_event_name":"PostToolUse","cwd":"$PROJECT","tool_name":"apply_patch","tool_use_id":"edit-2","tool_input":{"command":"*** Update File: src/lib.rs\n*** Add File: src/recovery.rs\n"},"tool_response":{"output":"Done"}}
+{"session_id":"backtest-session","turn_id":"turn-2","hook_event_name":"PostToolUse","cwd":"$PROJECT","tool_name":"Bash","tool_use_id":"check-2","tool_input":{"command":"cargo test --workspace"},"tool_response":{"exit_code":0,"output":"all tests passed"}}
+{"session_id":"backtest-session","turn_id":"turn-2","hook_event_name":"Stop","cwd":"$PROJECT","stop_hook_active":false,"last_assistant_message":"done"}
+{"session_id":"backtest-session","turn_id":"turn-3","hook_event_name":"UserPromptSubmit","cwd":"$PROJECT","prompt":"what remains?"}

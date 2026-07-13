@@ -1,0 +1,36 @@
+[package]
+name = "spectra"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "spectra"
+path = "src/main.rs"
+
+[dependencies]
+base64.workspace = true
+clap.workspace = true
+rmcp.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+spectra-core = { path = "../spectra-core" }
+tokio.workspace = true
+
+[[bin]]
+name = "spectra-bench"
+path = "src/bin/spectra-bench.rs"
+
+[[bin]]
+name = "spectra-grok-eval"
+path = "src/bin/spectra-grok-eval.rs"
+
+[[bin]]
+name = "spectra-ledger-bench"
+path = "src/bin/spectra-ledger-bench.rs"
+
+[[bin]]
+name = "spectra-ledger-grok-eval"
+path = "src/bin/spectra-ledger-grok-eval.rs"
