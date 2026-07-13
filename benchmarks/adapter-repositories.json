@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "repositories": [
+    {
+      "name": "full-stack-fastapi",
+      "framework": "FastAPI + React",
+      "url": "https://github.com/fastapi/full-stack-fastapi-template.git",
+      "commit": "7d80b8534ecfff3d4c6cc631012298d6ef605ca0",
+      "minimum_spectra_routes": 18
+    },
+    {
+      "name": "laravel",
+      "framework": "Laravel",
+      "url": "https://github.com/laravel/laravel.git",
+      "commit": "43f3606336468af53f85aa6c993ce72041c63a61",
+      "minimum_spectra_routes": 1
+    },
+    {
+      "name": "nestjs-starter",
+      "framework": "NestJS",
+      "url": "https://github.com/nestjs/typescript-starter.git",
+      "commit": "c4d9330f5513eda0fb5df594f6b34a11fde1a934",
+      "minimum_spectra_routes": 1
+    },
+    {
+      "name": "spring-petclinic",
+      "framework": "Spring MVC",
+      "url": "https://github.com/spring-projects/spring-petclinic.git",
+      "commit": "51045d1648dad955df586150c1a1a6e22ef400c2",
+      "minimum_spectra_routes": 17
+    },
+    {
+      "name": "vapor-template",
+      "framework": "Vapor",
+      "url": "https://github.com/vapor/template.git",
+      "commit": "e8dd91783dc2cb5599b916a614337807706b8929",
+      "minimum_spectra_routes": 3
+    }
+  ]
+}

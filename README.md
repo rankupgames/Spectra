@@ -107,7 +107,7 @@ Spectra returns a PNG and compact metadata:
 ```text
 N1=src/router.rs:18-47
 N2=src/store.rs:9-31
-nodes=42 truncated=false index=v3
+nodes=42 truncated=false index=v4
 autosync=active pending=0
 ```
 
@@ -119,7 +119,7 @@ Normal use creates a project-local `.spectra/` directory containing generated st
 
 ```text
 .spectra/
-├── index-v3.json          incremental polyglot code index
+├── index-v4.json          incremental polyglot code index
 ├── ledger-v1.jsonl        append-only context ledger
 └── artifacts/             generated PNG and SVG maps
 ```

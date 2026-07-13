@@ -567,7 +567,7 @@ mod tests {
         let root = Path::new("/project");
         assert!(!relevant_path(
             root,
-            Path::new("/project/.spectra/index-v3.json"),
+            Path::new("/project/.spectra/index-v4.json"),
             &EventKind::Modify(notify::event::ModifyKind::Any)
         ));
         assert!(!relevant_path(

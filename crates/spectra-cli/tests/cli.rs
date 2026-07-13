@@ -66,7 +66,7 @@ fn init_and_map_complete_end_to_end() {
     let stdout = String::from_utf8(map.stdout).unwrap();
     assert!(stdout.contains("PNG "));
     assert!(stdout.contains("N1=src/lib.rs:"));
-    assert!(root.join(".spectra/index-v3.json").is_file());
+    assert!(root.join(".spectra/index-v4.json").is_file());
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -93,11 +93,11 @@ fn concurrent_sync_processes_serialize_index_and_ledger_writes() {
     assert!(second.wait().unwrap().success());
 
     let index: serde_json::Value =
-        serde_json::from_slice(&fs::read(root.join(".spectra/index-v3.json")).unwrap()).unwrap();
+        serde_json::from_slice(&fs::read(root.join(".spectra/index-v4.json")).unwrap()).unwrap();
     assert_eq!(index["files"].as_object().unwrap().len(), 201);
     let events = fs::read_to_string(root.join(".spectra/ledger-v1.jsonl")).unwrap();
     assert_eq!(events.lines().count(), 1);
-    assert!(!root.join(".spectra/index-v3.lock").exists());
+    assert!(!root.join(".spectra/index-v4.lock").exists());
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -143,7 +143,7 @@ fn git_autosync_fallback_executes_a_quiet_background_sync() {
             .success()
     );
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !root.join(".spectra/index-v3.json").exists()
+    while !root.join(".spectra/index-v4.json").exists()
         || fs::read_to_string(root.join(".spectra/ledger-v1.jsonl"))
             .map(|ledger| !ledger.ends_with('\n'))
             .unwrap_or(true)

@@ -19,9 +19,9 @@ use crate::{
     graph::{NodeId, PackedGraph},
 };
 
-pub const INDEX_VERSION: u32 = 3;
-const INDEX_PATH: &str = ".spectra/index-v3.json";
-const INDEX_LOCK_PATH: &str = ".spectra/index-v3.lock";
+pub const INDEX_VERSION: u32 = 4;
+const INDEX_PATH: &str = ".spectra/index-v4.json";
+const INDEX_LOCK_PATH: &str = ".spectra/index-v4.lock";
 const INDEX_LOCK_ATTEMPTS: usize = 1_000;
 const INDEX_LOCK_RETRY: Duration = Duration::from_millis(50);
 const INDEX_LOCK_HEARTBEAT: Duration = Duration::from_secs(2);
@@ -1611,7 +1611,7 @@ function handleClick() {}
 
         let (index, report) = CodeIndex::refresh(&root).unwrap();
         assert_eq!(report.files, 2);
-        assert_eq!(index.version, 3);
+        assert_eq!(index.version, INDEX_VERSION);
         let find = |kind: &str, label: &str| {
             index
                 .graph

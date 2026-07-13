@@ -460,6 +460,7 @@ pub(crate) fn rust_routes(source: &str) -> Vec<FileSymbol> {
 }
 
 pub(crate) fn swift_routes(source: &str) -> Vec<FileSymbol> {
+    let groups = swift_route_groups(source);
     let mut symbols = Vec::new();
     for method in ["get", "post", "put", "patch", "delete", "head", "options"] {
         for call in balanced_calls(source, &format!(".{method}(")) {
@@ -473,6 +474,10 @@ pub(crate) fn swift_routes(source: &str) -> Vec<FileSymbol> {
                 .filter_map(|arg| first_quoted(arg))
                 .collect::<Vec<_>>()
                 .join("/");
+            let prefix = receiver_before(source, call.start)
+                .and_then(|receiver| groups.get(receiver))
+                .map(String::as_str)
+                .unwrap_or("");
             let Some(handler) = handler_name(use_arg.trim_start_matches("use:")) else {
                 continue;
             };
@@ -481,7 +486,7 @@ pub(crate) fn swift_routes(source: &str) -> Vec<FileSymbol> {
                 format!(
                     "{} {}",
                     method.to_ascii_uppercase(),
-                    normalized_route(&path)
+                    join_route(prefix, &path)
                 ),
                 call.line,
                 vec![relation("routes_to", handler)],
@@ -707,6 +712,7 @@ fn expo_module_symbols(source: &str) -> Vec<FileSymbol> {
 struct BalancedCall<'a> {
     body: &'a str,
     line: usize,
+    start: usize,
 }
 
 fn balanced_calls<'a>(source: &'a str, marker: &str) -> Vec<BalancedCall<'a>> {
@@ -766,6 +772,7 @@ fn balanced_calls<'a>(source: &'a str, marker: &str) -> Vec<BalancedCall<'a>> {
                                 .filter(|byte| *byte == b'\n')
                                 .count()
                                 + 1,
+                            start,
                         });
                         end += character.len_utf8();
                         break;
@@ -940,6 +947,51 @@ fn tagged_value(line: &str, key: &str) -> Option<String> {
     let start = line.find(&marker)? + marker.len();
     let end = line[start..].find('"')? + start;
     Some(line[start..end].to_owned())
+}
+
+fn swift_route_groups(source: &str) -> std::collections::BTreeMap<String, String> {
+    let mut groups = std::collections::BTreeMap::new();
+    for line in source.lines() {
+        if let Some((binding, value)) = line.split_once('=')
+            && let Some(grouped) = value.find(".grouped")
+            && let (Some(name), Some(segment)) = (
+                binding.split_whitespace().last(),
+                first_quoted(&value[grouped..]),
+            )
+        {
+            let base = value[..grouped].trim();
+            let prefix = groups.get(base).map(String::as_str).unwrap_or("");
+            groups.insert(name.to_owned(), join_route(prefix, &segment));
+        }
+        if let Some(grouped) = line.find(".group(")
+            && let Some(open) = line.find('{')
+            && let Some(in_keyword) = line[open + 1..].find(" in")
+            && let Some(segment) = first_quoted(&line[grouped..])
+        {
+            let receiver = line[..grouped].split_whitespace().last().unwrap_or("");
+            let alias = line[open + 1..open + 1 + in_keyword].trim();
+            if is_identifier(alias) {
+                let prefix = groups.get(receiver).map(String::as_str).unwrap_or("");
+                groups.insert(alias.to_owned(), join_route(prefix, &segment));
+            }
+        }
+    }
+    groups
+}
+
+fn receiver_before(source: &str, offset: usize) -> Option<&str> {
+    let before = source.get(..offset)?;
+    let end = before.len();
+    let start = before
+        .char_indices()
+        .rev()
+        .take_while(|(_, character)| is_identifier_character(*character))
+        .last()
+        .map(|(index, _)| index)
+        .unwrap_or(end);
+    before
+        .get(start..end)
+        .filter(|receiver| !receiver.is_empty())
 }
 
 fn jsx_attribute(window: &str, attribute: &str) -> Option<String> {
@@ -1133,7 +1185,7 @@ fn resource_path(base: &str, suffix: &str) -> String {
 
 fn join_route(prefix: &str, path: &str) -> String {
     let joined = format!("{}/{}", prefix.trim_matches('/'), path.trim_matches('/'));
-    normalized_route(&joined)
+    normalized_route(joined.trim_end_matches('/'))
 }
 
 fn normalized_route(path: &str) -> String {
@@ -1265,8 +1317,12 @@ mod tests {
             "UsersController::Show"
         ));
 
-        let swift = swift_routes("app.post(\"users\", use: createUser)\nfunc createUser() {}");
+        let swift = swift_routes(
+            "app.post(\"users\", use: createUser)\nlet todos = routes.grouped(\"todos\")\ntodos.get(use: index)\ntodos.group(\":todoID\") { todo in\ntodo.delete(use: delete)\n}\nfunc createUser() {}",
+        );
         assert!(has_route(&swift, "POST /users", "createUser"));
+        assert!(has_route(&swift, "GET /todos", "index"));
+        assert!(has_route(&swift, "DELETE /todos/:todoID", "delete"));
 
         let play = play_routes(
             std::path::Path::new("conf/routes"),
