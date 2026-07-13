@@ -4,7 +4,8 @@ use std::{
     path::PathBuf,
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
-    time::{SystemTime, UNIX_EPOCH},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use spectra_core::{LedgerState, LedgerStore};
@@ -66,6 +67,100 @@ fn init_and_map_complete_end_to_end() {
     assert!(stdout.contains("PNG "));
     assert!(stdout.contains("N1=src/lib.rs:"));
     assert!(root.join(".spectra/index-v3.json").is_file());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn concurrent_sync_processes_serialize_index_and_ledger_writes() {
+    let root = fixture();
+    for index in 0..200 {
+        fs::write(
+            root.join(format!("src/module_{index}.rs")),
+            format!("pub fn function_{index}() {{}}\n"),
+        )
+        .unwrap();
+    }
+    let binary = env!("CARGO_BIN_EXE_spectra");
+    let mut first = Command::new(binary)
+        .args(["sync", "--quiet", root.to_str().unwrap()])
+        .spawn()
+        .unwrap();
+    let mut second = Command::new(binary)
+        .args(["sync", "--quiet", root.to_str().unwrap()])
+        .spawn()
+        .unwrap();
+    assert!(first.wait().unwrap().success());
+    assert!(second.wait().unwrap().success());
+
+    let index: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join(".spectra/index-v3.json")).unwrap()).unwrap();
+    assert_eq!(index["files"].as_object().unwrap().len(), 201);
+    let events = fs::read_to_string(root.join(".spectra/ledger-v1.jsonl")).unwrap();
+    assert_eq!(events.lines().count(), 1);
+    assert!(!root.join(".spectra/index-v3.lock").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn git_autosync_fallback_executes_a_quiet_background_sync() {
+    let root = fixture();
+    assert!(
+        Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_spectra"));
+    let installed = Command::new(&binary)
+        .args(["autosync", "install", root.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        installed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&installed.stderr)
+    );
+    let status = Command::new(&binary)
+        .args(["autosync", "status", root.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&status.stdout).contains("fallback=current"));
+
+    let mut paths = vec![binary.parent().unwrap().to_path_buf()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let hook = root.join(".git/hooks/post-checkout");
+    assert!(
+        Command::new(&hook)
+            .current_dir(&root)
+            .env("PATH", std::env::join_paths(paths).unwrap())
+            .status()
+            .unwrap()
+            .success()
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !root.join(".spectra/index-v3.json").exists()
+        || fs::read_to_string(root.join(".spectra/ledger-v1.jsonl"))
+            .map(|ledger| !ledger.ends_with('\n'))
+            .unwrap_or(true)
+    {
+        assert!(
+            Instant::now() < deadline,
+            "Git fallback did not sync in time"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+
+    let removed = Command::new(&binary)
+        .args(["autosync", "remove", root.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(removed.status.success());
+    assert!(!hook.exists());
     fs::remove_dir_all(root).unwrap();
 }
 

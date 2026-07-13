@@ -158,6 +158,10 @@ pub(crate) fn for_path(path: &Path) -> Option<&'static dyn LanguageAdapter> {
         .find(|adapter| adapter.extensions().contains(&extension))
 }
 
+pub fn is_supported_path(path: &Path) -> bool {
+    for_path(path).is_some()
+}
+
 pub(crate) fn for_id(id: &str) -> Option<&'static dyn LanguageAdapter> {
     ADAPTERS.iter().copied().find(|adapter| adapter.id() == id)
 }

@@ -1,8 +1,11 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    fs,
-    io::Write,
+    fs::{self, OpenOptions},
+    io::{Read, Seek, Write},
     path::{Path, PathBuf},
+    sync::mpsc::{self, Sender},
+    thread::{self, JoinHandle},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use atomic_write_file::AtomicWriteFile;
@@ -18,6 +21,11 @@ use crate::{
 
 pub const INDEX_VERSION: u32 = 3;
 const INDEX_PATH: &str = ".spectra/index-v3.json";
+const INDEX_LOCK_PATH: &str = ".spectra/index-v3.lock";
+const INDEX_LOCK_ATTEMPTS: usize = 1_000;
+const INDEX_LOCK_RETRY: Duration = Duration::from_millis(50);
+const INDEX_LOCK_HEARTBEAT: Duration = Duration::from_secs(2);
+const INDEX_LOCK_STALE_AGE: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceSpan {
@@ -95,6 +103,11 @@ struct CachedEdge {
 
 impl CodeIndex {
     pub fn refresh(project: &Path) -> Result<(Self, IndexReport)> {
+        let (index, report, _lock) = Self::refresh_holding_lock(project)?;
+        Ok((index, report))
+    }
+
+    pub(crate) fn refresh_holding_lock(project: &Path) -> Result<(Self, IndexReport, IndexLock)> {
         let project = project
             .canonicalize()
             .map_err(|error| Error::InvalidProject(format!("{}: {error}", project.display())))?;
@@ -104,6 +117,7 @@ impl CodeIndex {
                 project.display()
             )));
         }
+        let lock = IndexLock::acquire(&project)?;
 
         let cache_path = project.join(INDEX_PATH);
         let mut cache = load_cache(&cache_path).unwrap_or_default();
@@ -141,7 +155,119 @@ impl CodeIndex {
             nodes: index.graph.nodes.len(),
             edges: index.graph.edges.len(),
         };
-        Ok((index, report))
+        Ok((index, report, lock))
+    }
+}
+
+pub(crate) struct IndexLock {
+    path: PathBuf,
+    token: String,
+    stop: Sender<()>,
+    heartbeat: Option<JoinHandle<()>>,
+}
+
+impl IndexLock {
+    fn acquire(project: &Path) -> Result<Self> {
+        let path = project.join(INDEX_LOCK_PATH);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        for _ in 0..INDEX_LOCK_ATTEMPTS {
+            match OpenOptions::new().create_new(true).write(true).open(&path) {
+                Ok(owner) => return Self::start(path, owner),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if lock_is_stale(&path) {
+                        let _ = fs::remove_file(&path);
+                    } else {
+                        thread::sleep(INDEX_LOCK_RETRY);
+                    }
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(Error::Index(
+            "timed out waiting for another Spectra index writer".into(),
+        ))
+    }
+
+    fn start(path: PathBuf, mut owner: fs::File) -> Result<Self> {
+        let token = format!(
+            "pid={} nonce={}\n",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        if let Err(error) = owner.write_all(token.as_bytes()) {
+            let _ = fs::remove_file(&path);
+            return Err(error.into());
+        }
+        drop(owner);
+        let (stop, receiver) = mpsc::channel();
+        let heartbeat_path = path.clone();
+        let heartbeat_token = token.clone();
+        let heartbeat = match thread::Builder::new()
+            .name("spectra-index-lock".into())
+            .spawn(move || {
+                while matches!(
+                    receiver.recv_timeout(INDEX_LOCK_HEARTBEAT),
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                ) {
+                    if !refresh_owned_lock(&heartbeat_path, &heartbeat_token) {
+                        break;
+                    }
+                }
+            }) {
+            Ok(heartbeat) => heartbeat,
+            Err(error) => {
+                let _ = fs::remove_file(&path);
+                return Err(Error::Io(error));
+            }
+        };
+        Ok(Self {
+            path,
+            token,
+            stop,
+            heartbeat: Some(heartbeat),
+        })
+    }
+}
+
+impl Drop for IndexLock {
+    fn drop(&mut self) {
+        let _ = self.stop.send(());
+        if let Some(heartbeat) = self.heartbeat.take() {
+            let _ = heartbeat.join();
+        }
+        remove_owned_lock(&self.path, &self.token);
+    }
+}
+
+fn lock_is_stale(path: &Path) -> bool {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .and_then(|modified| modified.elapsed().map_err(std::io::Error::other))
+        .is_ok_and(|age| age > INDEX_LOCK_STALE_AGE)
+}
+
+fn refresh_owned_lock(path: &Path, token: &str) -> bool {
+    let Ok(mut file) = OpenOptions::new().read(true).write(true).open(path) else {
+        return false;
+    };
+    let mut current = String::new();
+    if file.read_to_string(&mut current).is_err() || current != token {
+        return false;
+    }
+    file.set_len(0).is_ok()
+        && file.rewind().is_ok()
+        && file.write_all(token.as_bytes()).is_ok()
+        && file.sync_data().is_ok()
+}
+
+fn remove_owned_lock(path: &Path, token: &str) {
+    if fs::read_to_string(path).is_ok_and(|current| current == token) {
+        let _ = fs::remove_file(path);
     }
 }
 
@@ -1007,6 +1133,44 @@ function fetchPost() {}
         fs::remove_file(source).unwrap();
         let (_, removed) = CodeIndex::refresh(&root).unwrap();
         assert_eq!(removed.removed, 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refresh_releases_the_cross_process_lock_after_failure() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "spectra-index-lock-test-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("invalid.rs"), [0xff, 0xfe]).unwrap();
+
+        assert!(CodeIndex::refresh(&root).is_err());
+        assert!(!root.join(INDEX_LOCK_PATH).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn index_lock_records_an_owner_and_cleans_up() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "spectra-index-lock-owner-test-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+
+        let lock = IndexLock::acquire(&root).unwrap();
+        let owner = root.join(INDEX_LOCK_PATH);
+        assert!(fs::read_to_string(owner).unwrap().contains("pid="));
+        drop(lock);
+        assert!(!root.join(INDEX_LOCK_PATH).exists());
         fs::remove_dir_all(root).unwrap();
     }
 

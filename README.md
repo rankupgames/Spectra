@@ -29,7 +29,7 @@ Most code-context tools answer with source and explanation together. That can be
 - **See the system first.** Spectra turns the relevant part of the architecture into a deterministic 1536×1024 map.
 - **Read with a purpose.** Every visual ID points back to an exact file and line range.
 - **Keep the answer small.** Maps show 48 nodes by default and never more than 96.
-- **Stay current.** Changed, added, and deleted supported source files are refreshed before a map is returned.
+- **Stay current.** The MCP server watches served projects in the background, and every map retains a synchronous refresh fallback.
 - **Remember outcomes, not noise.** The Ledger keeps edits, test results, and blockers without saving full conversations or terminal output.
 - **Keep it local.** Parsing, indexing, rendering, selection, and replay all happen on your machine.
 
@@ -86,7 +86,7 @@ Codex: MCP=current, Ledger hooks=current
 
 Your output only lists the agents Spectra detected. Every supported agent gets visual topology; Codex also gets the lifecycle Ledger. Spectra will not claim Ledger support for another agent until that agent's lifecycle protocol is documented and replay-tested.
 
-After that, there is nothing to babysit. Spectra creates project data when it is first needed and checks for changes before every map. You do not need to run a daemon, remember a `sync` command, or initialize each repository by hand.
+After that, there is nothing to babysit. The long-lived MCP process watches every project it serves, reconciles changes after a short debounce, and performs a startup catch-up before accepting requests. Maps still check for changes synchronously, so a degraded or unavailable watcher cannot silently return a stale topology. Concurrent MCP servers, CLI commands, and fallback hooks coordinate through a heartbeat-backed project lock. You do not need to run a separate daemon, remember a `sync` command, or initialize each repository by hand.
 
 ### 3. Use it
 
@@ -107,7 +107,8 @@ Spectra returns a PNG and compact metadata:
 ```text
 N1=src/router.rs:18-47
 N2=src/store.rs:9-31
-nodes=42 truncated=false index=v2
+nodes=42 truncated=false index=v3
+autosync=active pending=0
 ```
 
 From there, the agent can pick an anchor and open the part of the source that actually matters.
@@ -122,6 +123,10 @@ Normal use creates a project-local `.spectra/` directory containing generated st
 ├── ledger-v1.jsonl        append-only context ledger
 └── artifacts/             generated PNG and SVG maps
 ```
+
+When the MCP server starts, Spectra registers a recursive filesystem watcher before its initial catch-up refresh. Supported source changes, directory changes, and ignore-rule changes are collected for two seconds and reconciled as one batch. Failed reconciliations retain their pending paths and retry; watcher setup failures are reported as degraded, retried on the next request, and backed by request-time refresh. Runtime writes under `.spectra/` and internal Git activity do not trigger feedback loops.
+
+Index reconciliation is serialized across processes. The lock records a unique owner, refreshes a heartbeat during long scans, recovers abandoned locks, and remains held until the matching RepositorySynced Ledger event is committed. This allows several agent MCP processes and Git hooks to share one project index without corrupting the cache or duplicating material sync events.
 
 Whenever an agent asks for a map, Spectra:
 
@@ -142,11 +147,17 @@ spectra status [--agent auto|all|claude|cursor|codex|open-code|hermes|gemini|ant
 spectra uninstall [--agent auto|all|claude|cursor|codex|open-code|hermes|gemini|antigravity|kiro] [--dry-run]
 
 spectra init [PATH]
+spectra sync [PATH] [--quiet]
+spectra autosync install [PATH]
+spectra autosync status [PATH]
+spectra autosync remove [PATH]
 spectra map <QUERY> [--path PATH] [--max-nodes 1..96] [--out DIR]
 spectra serve --mcp
 ```
 
-`spectra init` is an optional eager-indexing command for diagnostics and benchmarks. It is not required during ordinary use.
+`spectra init` is an optional eager-indexing command for diagnostics and benchmarks. `spectra sync` exposes the same reconciliation path used by the watcher and is intentionally quiet-capable for automation. Neither command is required during ordinary MCP use.
+
+On filesystems where native recursive watching is unavailable or unreliable, `spectra autosync install` adds marked blocks to the repository's `post-commit`, `post-merge`, and `post-checkout` hooks. Each hook launches `spectra sync --quiet` in the background. Installation is idempotent, honors Git's resolved hooks directory, preserves existing hook bodies, and `spectra autosync remove` deletes only Spectra-owned blocks.
 
 `--agent auto` is the default and configures every detected agent. `--agent all` attempts every adapter; agents that expose configuration only through their own CLI must already be installed.
 
@@ -161,6 +172,8 @@ spectra_map(query, project_path?, max_nodes?)
 ```
 
 Its response contains an `image/png` content block followed by compact anchor metadata. It never includes source bodies.
+
+The final metadata line reports watcher health as `autosync=active|degraded pending=N`. Set `SPECTRA_WATCH_DEBOUNCE_MS` to a value from 100 through 60000 to override the default 2000 ms debounce window for unusually bursty repositories.
 
 Automatic configuration is recommended. For a manual setup, register an MCP server named `spectra` that runs:
 
@@ -181,7 +194,7 @@ args = ["serve", "--mcp"]
 The workspace is intentionally split into two small layers:
 
 - **`spectra-core`:** packed graph primitives, language-adapter extraction and resolution, deterministic selection and rendering, incremental indexing, and the State Machine Ledger.
-- **`spectra`:** CLI commands, stdio MCP transport, multi-agent installation, Codex lifecycle-hook translation, and benchmark runners.
+- **`spectra`:** CLI commands, stdio MCP transport, watcher-backed automatic synchronization, multi-agent installation, Codex lifecycle-hook translation, and benchmark runners.
 
 The internal graph kernel is domain-neutral:
 
@@ -205,6 +218,7 @@ Spectra should not become another transcript database. It deliberately keeps les
 - Prompts, assistant messages, patch bodies, and terminal output bodies are not written to the Ledger.
 - Credential-shaped values are redacted before persistence.
 - Hook retries use correlation IDs so immutable events are not duplicated.
+- Index writers use an ownership-checked heartbeat lock across MCP, CLI, and Git-hook processes.
 - Cross-process transactions serialize concurrent Ledger writers.
 - Malformed or unsupported hook events fail open and cannot block the agent loop.
 - The `.env` file and `.spectra/` runtime data are ignored by Git.

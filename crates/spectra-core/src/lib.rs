@@ -8,7 +8,7 @@ pub mod ledger;
 mod render;
 mod select;
 
-pub use adapters::{SupportedLanguage, supported_languages};
+pub use adapters::{SupportedLanguage, is_supported_path, supported_languages};
 pub use error::{Error, Result};
 pub use index::{CodeIndex, INDEX_VERSION, IndexReport, SourceSpan};
 pub use ledger::{
@@ -26,19 +26,7 @@ pub fn map_project(
     max_nodes: usize,
     output_dir: &Path,
 ) -> Result<MapArtifact> {
-    let (index, report) = CodeIndex::refresh(project)?;
-    LedgerStore::transaction(project, |ledger| {
-        if report.changed > 0 || report.removed > 0 || ledger.is_empty() {
-            ledger.append(LedgerEventKind::RepositorySynced {
-                files: report.files,
-                changed: report.changed,
-                removed: report.removed,
-                nodes: report.nodes,
-                edges: report.edges,
-            })?;
-        }
-        Ok(())
-    })?;
+    let (index, _) = sync_project(project)?;
     let selection = select_subgraph(
         &index,
         query,
@@ -79,4 +67,22 @@ pub fn map_project(
         Ok(())
     })?;
     Ok(artifact)
+}
+
+/// Reconcile the project index and record material repository changes.
+pub fn sync_project(project: &Path) -> Result<(CodeIndex, IndexReport)> {
+    let (index, report, _lock) = CodeIndex::refresh_holding_lock(project)?;
+    LedgerStore::transaction(project, |ledger| {
+        if report.changed > 0 || report.removed > 0 || ledger.is_empty() {
+            ledger.append(LedgerEventKind::RepositorySynced {
+                files: report.files,
+                changed: report.changed,
+                removed: report.removed,
+                nodes: report.nodes,
+                edges: report.edges,
+            })?;
+        }
+        Ok(())
+    })?;
+    Ok((index, report))
 }
