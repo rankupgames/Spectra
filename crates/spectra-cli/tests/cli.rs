@@ -396,7 +396,12 @@ fn opencode_jsonc_preserves_comments_and_unrelated_servers() {
     assert!(String::from_utf8_lossy(&run("status").stdout).contains("MCP=current"));
 
     let executable = fs::canonicalize(env!("CARGO_BIN_EXE_spectra")).unwrap();
-    let stale = configured.replace(executable.to_str().unwrap(), "/old/location/spectra");
+    let current_command = serde_json::to_string(executable.to_str().unwrap()).unwrap();
+    let stale = configured.replace(&current_command, r#""/old/location/spectra""#);
+    assert_ne!(
+        stale, configured,
+        "fixture must contain the current command"
+    );
     fs::write(&path, stale).unwrap();
     let updated = run("install");
     assert!(updated.status.success());
@@ -464,7 +469,12 @@ fn hermes_yaml_preserves_unrelated_configuration() {
     assert!(String::from_utf8_lossy(&run("status").stdout).contains("MCP=current"));
 
     let executable = fs::canonicalize(env!("CARGO_BIN_EXE_spectra")).unwrap();
-    let stale = configured.replace(executable.to_str().unwrap(), "/old/location/spectra");
+    let current_command = serde_json::to_string(executable.to_str().unwrap()).unwrap();
+    let stale = configured.replace(&current_command, r#""/old/location/spectra""#);
+    assert_ne!(
+        stale, configured,
+        "fixture must contain the current command"
+    );
     fs::write(&path, stale).unwrap();
     let updated = run("install");
     assert!(updated.status.success());
@@ -593,22 +603,19 @@ fn auto_reports_a_conflict_without_skipping_other_detected_agents() {
 fn backtests_a_recorded_codex_hook_session_without_fact_loss() {
     let root = fixture();
     fs::create_dir_all(root.join(".git")).unwrap();
-    let fixture = include_str!("../../../benchmarks/fixtures/codex-hook-session.jsonl")
-        .replace("$PROJECT", root.to_str().unwrap());
+    let fixture = include_str!("../../../benchmarks/fixtures/codex-hook-session.jsonl");
     let mut final_output = Vec::new();
     for event in fixture.lines() {
+        let mut event: serde_json::Value = serde_json::from_str(event).unwrap();
+        event["cwd"] = root.to_str().unwrap().into();
+        let event = serde_json::to_vec(&event).unwrap();
         let mut child = Command::new(env!("CARGO_BIN_EXE_spectra"))
             .arg("hook")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
             .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(event.as_bytes())
-            .unwrap();
+        child.stdin.take().unwrap().write_all(&event).unwrap();
         let output = child.wait_with_output().unwrap();
         assert!(
             output.status.success(),
