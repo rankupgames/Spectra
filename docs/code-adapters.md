@@ -37,11 +37,15 @@ Core extraction, ecosystem routing, and language bridges may land separately, bu
 | Dart | `.dart` | Implemented | Calls, imports, extends, implements, and mixins | Planned |
 | Lua | `.lua` | Implemented | Calls and module requires | Planned |
 | Luau | `.luau` | Implemented | Calls, module requires, and type aliases | Planned |
+| Svelte | `.svelte` | Implemented, including embedded JS/TS | Calls, imports, component renders, event bindings | SvelteKit `+page` routes and script bridges implemented |
+| Vue | `.vue` | Implemented, including embedded JS/TS | Calls, imports, component renders, event bindings | Nuxt page routes and script-setup bridges implemented |
+| Astro | `.astro` | Implemented, including frontmatter TS | Calls, imports, component renders, event bindings | Astro page routes and frontmatter bridges implemented |
+| Liquid | `.liquid` | Implemented over HTML structure | Render/include and output bindings | Template-to-snippet and output bridges implemented |
 
-The common resolver links a target only when there is one matching definition. Multiple candidates produce a typed uncertain boundary, preserving ambiguity in the rendered topology.
+The common resolver links a target only when there is one matching definition. Multiple candidates produce a typed uncertain boundary, preserving ambiguity in the rendered topology. Conventional page routes use local `routes_to` edges, while embedded script symbols remain contained by their component and participate in normal cross-file resolution.
 
 ## Parity baseline
 
-The baseline is CodeGraph v1.3.0 as installed when v0.2 development began. Remaining families include Objective-C, R, Nix, Erlang, Solidity, Terraform/OpenTofu, Svelte, Vue, Astro, Liquid, Pascal/Delphi, ArkTS, Visual Basic .NET, CFML, COBOL, CUDA, and Metal.
+The baseline is CodeGraph v1.3.0 as installed when v0.2 development began. Remaining families include Objective-C, R, Nix, Erlang, Solidity, Terraform/OpenTofu, Pascal/Delphi, ArkTS, Visual Basic .NET, CFML, COBOL, CUDA, and Metal.
 
 Parity is pinned to this baseline so a moving upstream language list cannot silently change the release gate. Later CodeGraph additions can be adopted deliberately.

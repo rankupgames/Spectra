@@ -17,6 +17,7 @@ mod rust;
 mod scala;
 mod swift;
 mod typescript;
+mod web;
 
 pub(crate) use go::GO;
 pub(crate) use java::JAVA;
@@ -28,8 +29,9 @@ pub(crate) use rust::RUST;
 pub(crate) use scala::SCALA;
 pub(crate) use swift::SWIFT;
 pub(crate) use typescript::TYPESCRIPT;
+pub(crate) use web::{ASTRO, LIQUID, SVELTE, VUE};
 
-static ADAPTERS: [&dyn LanguageAdapter; 17] = [
+static ADAPTERS: [&dyn LanguageAdapter; 21] = [
     &RUST,
     &TYPESCRIPT,
     &JAVASCRIPT,
@@ -47,6 +49,10 @@ static ADAPTERS: [&dyn LanguageAdapter; 17] = [
     &DART,
     &LUA,
     &LUAU,
+    &SVELTE,
+    &VUE,
+    &ASTRO,
+    &LIQUID,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -65,6 +71,22 @@ pub(crate) struct Scope {
 pub(crate) struct Relation {
     pub(crate) kind: &'static str,
     pub(crate) target: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FileSymbol {
+    pub(crate) kind: &'static str,
+    pub(crate) label: String,
+    pub(crate) start_line: u32,
+    pub(crate) end_line: u32,
+    pub(crate) relations: Vec<Relation>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct EmbeddedRegion {
+    pub(crate) language: &'static str,
+    pub(crate) start_byte: usize,
+    pub(crate) end_byte: usize,
 }
 
 pub(crate) trait LanguageAdapter: Sync {
@@ -98,6 +120,14 @@ pub(crate) trait LanguageAdapter: Sync {
         Vec::new()
     }
 
+    fn file_symbols(&self, _path: &Path, _source: &str) -> Vec<FileSymbol> {
+        Vec::new()
+    }
+
+    fn embedded_regions(&self, _source: &str) -> Vec<EmbeddedRegion> {
+        Vec::new()
+    }
+
     fn opens_scope(&self, kind: &str) -> bool {
         matches!(
             kind,
@@ -120,6 +150,10 @@ pub(crate) fn for_path(path: &Path) -> Option<&'static dyn LanguageAdapter> {
         .iter()
         .copied()
         .find(|adapter| adapter.extensions().contains(&extension))
+}
+
+pub(crate) fn for_id(id: &str) -> Option<&'static dyn LanguageAdapter> {
+    ADAPTERS.iter().copied().find(|adapter| adapter.id() == id)
 }
 
 pub fn supported_languages() -> Vec<SupportedLanguage> {

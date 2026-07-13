@@ -16,8 +16,8 @@ use crate::{
     graph::{NodeId, PackedGraph},
 };
 
-pub const INDEX_VERSION: u32 = 2;
-const INDEX_PATH: &str = ".spectra/index-v2.json";
+pub const INDEX_VERSION: u32 = 3;
+const INDEX_PATH: &str = ".spectra/index-v3.json";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceSpan {
@@ -64,6 +64,7 @@ struct CachedFile {
     language: String,
     nodes: Vec<CachedNode>,
     edges: Vec<PendingEdge>,
+    local_edges: Vec<CachedEdge>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -83,6 +84,13 @@ struct PendingEdge {
     target_name: String,
     kind: String,
     line: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CachedEdge {
+    source: u32,
+    target: u32,
+    kind: String,
 }
 
 impl CodeIndex {
@@ -196,6 +204,7 @@ fn parse_file(
         language: adapter.id().into(),
         nodes: Vec::new(),
         edges: Vec::new(),
+        local_edges: Vec::new(),
     };
     file.nodes.push(CachedNode {
         id: 0,
@@ -206,17 +215,113 @@ fn parse_file(
         end_line: source.lines().count().max(1) as u32,
         parent: None,
     });
+    let mut component = None;
+    let mut routes = Vec::new();
+    for symbol in adapter.file_symbols(Path::new(path), source) {
+        let id = file.nodes.len() as u32;
+        file.nodes.push(CachedNode {
+            id,
+            kind: symbol.kind.into(),
+            label: symbol.label.clone(),
+            qualified_name: symbol.label,
+            start_line: symbol.start_line,
+            end_line: symbol.end_line,
+            parent: Some(0),
+        });
+        for relation in symbol.relations {
+            file.edges.push(PendingEdge {
+                source: id,
+                target_name: relation.target,
+                kind: relation.kind.into(),
+                line: symbol.start_line,
+            });
+        }
+        if symbol.kind == "component" {
+            component = Some(id);
+        } else if symbol.kind == "route" {
+            routes.push(id);
+        }
+    }
+    if let Some(component) = component {
+        file.local_edges
+            .extend(routes.into_iter().map(|route| CachedEdge {
+                source: route,
+                target: component,
+                kind: "routes_to".into(),
+            }));
+    }
+
+    let syntax_parent = component.unwrap_or(0);
     let mut scopes = Vec::new();
     visit(
         adapter,
         tree.root_node(),
         source.as_bytes(),
         &mut file,
-        0,
-        None,
+        VisitContext {
+            parent: syntax_parent,
+            owner: None,
+            line_offset: 0,
+        },
         &mut scopes,
     );
+    for region in adapter.embedded_regions(source) {
+        if region.start_byte >= region.end_byte
+            || !source.is_char_boundary(region.start_byte)
+            || !source.is_char_boundary(region.end_byte)
+        {
+            continue;
+        }
+        let Some(embedded_adapter) = adapters::for_id(region.language) else {
+            continue;
+        };
+        let fragment = &source[region.start_byte..region.end_byte];
+        let mut embedded_parser = Parser::new();
+        let embedded_path = match region.language {
+            "typescript" => Path::new("embedded.ts"),
+            "javascript" => Path::new("embedded.js"),
+            _ => Path::new("embedded.txt"),
+        };
+        embedded_parser
+            .set_language(&embedded_adapter.language(embedded_path))
+            .map_err(|error| Error::Parse(error.to_string()))?;
+        let embedded_tree = embedded_parser
+            .parse(fragment, None)
+            .ok_or_else(|| Error::Parse(format!("embedded parser returned no tree for {path}")))?;
+        let line_offset = source[..region.start_byte]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count() as u32;
+        let mut embedded_scopes = component
+            .and_then(|id| file.nodes.get(id as usize))
+            .map(|node| {
+                vec![Scope {
+                    kind: "component",
+                    label: node.label.clone(),
+                }]
+            })
+            .unwrap_or_default();
+        visit(
+            embedded_adapter,
+            embedded_tree.root_node(),
+            fragment.as_bytes(),
+            &mut file,
+            VisitContext {
+                parent: syntax_parent,
+                owner: None,
+                line_offset,
+            },
+            &mut embedded_scopes,
+        );
+    }
     Ok(file)
+}
+
+#[derive(Clone, Copy)]
+struct VisitContext {
+    parent: u32,
+    owner: Option<u32>,
+    line_offset: u32,
 }
 
 fn visit(
@@ -224,14 +329,12 @@ fn visit(
     syntax: SyntaxNode<'_>,
     source: &[u8],
     file: &mut CachedFile,
-    parent: u32,
-    owner: Option<u32>,
+    context: VisitContext,
     scopes: &mut Vec<Scope>,
 ) {
     let mapped = adapter.classify(syntax, source, scopes);
 
-    let mut next_parent = parent;
-    let mut next_owner = owner;
+    let mut next = context;
     let mut pushed_scope = false;
     if let Some(mapped_kind) = mapped
         && let Some(label) = adapter.label(syntax, source, mapped_kind)
@@ -257,20 +360,20 @@ fn visit(
             kind: mapped_kind.into(),
             label: label.clone(),
             qualified_name,
-            start_line: position.row as u32 + 1,
-            end_line: end.row as u32 + 1,
-            parent: Some(parent),
+            start_line: position.row as u32 + 1 + context.line_offset,
+            end_line: end.row as u32 + 1 + context.line_offset,
+            parent: Some(context.parent),
         });
-        next_parent = id;
+        next.parent = id;
         if matches!(mapped_kind, "function" | "method") {
-            next_owner = Some(id);
+            next.owner = Some(id);
         }
         for relation in adapter.relations(syntax, source) {
             file.edges.push(PendingEdge {
                 source: id,
                 target_name: relation.target,
                 kind: relation.kind.into(),
-                line: position.row as u32 + 1,
+                line: position.row as u32 + 1 + context.line_offset,
             });
         }
         if adapter.opens_scope(mapped_kind) {
@@ -289,28 +392,20 @@ fn visit(
         }
     }
 
-    if let (Some(owner), Some(name)) = (next_owner, adapter.call_name(syntax, source))
+    if let (Some(owner), Some(name)) = (next.owner, adapter.call_name(syntax, source))
         && is_identifier(&name)
     {
         file.edges.push(PendingEdge {
             source: owner,
             target_name: name,
             kind: "calls".into(),
-            line: syntax.start_position().row as u32 + 1,
+            line: syntax.start_position().row as u32 + 1 + context.line_offset,
         });
     }
 
     let mut cursor = syntax.walk();
     for child in syntax.children(&mut cursor) {
-        visit(
-            adapter,
-            child,
-            source,
-            file,
-            next_parent,
-            next_owner,
-            scopes,
-        );
+        visit(adapter, child, source, file, next, scopes);
     }
     if pushed_scope {
         scopes.pop();
@@ -336,6 +431,15 @@ fn assemble(cache: &IndexCache) -> Result<CodeIndex> {
                 },
             );
             qualified_names.insert(id, node.qualified_name.clone());
+        }
+    }
+    for (path, file) in &cache.files {
+        for edge in &file.local_edges {
+            graph.add_edge(
+                ids[&(path.clone(), edge.source)],
+                ids[&(path.clone(), edge.target)],
+                &edge.kind,
+            )?;
         }
     }
     for (path, file) in &cache.files {
@@ -365,6 +469,7 @@ fn assemble(cache: &IndexCache) -> Result<CodeIndex> {
                 | "enum"
                 | "module"
                 | "type_alias"
+                | "component"
         ) {
             definitions
                 .entry(graph.atom(node.label).to_ascii_lowercase())
@@ -457,6 +562,14 @@ mod tests {
         file.edges
             .iter()
             .any(|edge| edge.kind == kind && edge.target_name == target)
+    }
+
+    fn has_local_edge(file: &CachedFile, kind: &str, source: &str, target: &str) -> bool {
+        file.local_edges.iter().any(|edge| {
+            edge.kind == kind
+                && file.nodes[edge.source as usize].label == source
+                && file.nodes[edge.target as usize].label == target
+        })
     }
 
     #[test]
@@ -682,9 +795,85 @@ mod tests {
     }
 
     #[test]
+    fn extracts_svelte_routes_components_and_typescript_bridges() {
+        let file = parsed(
+            "src/routes/dashboard/+page.svelte",
+            r#"<script lang="ts">
+import Card from "$lib/Card.svelte";
+function track() {}
+function handleClick() { track(); }
+</script>
+<Card on:click={handleClick} />
+"#,
+        );
+        assert!(has_node(&file, "component", "+page"));
+        assert!(has_node(&file, "route", "/dashboard"));
+        assert!(has_node(&file, "function", "handleClick"));
+        assert!(has_edge(&file, "imports", "Card"));
+        assert!(has_edge(&file, "renders", "Card"));
+        assert!(has_edge(&file, "binds", "handleClick"));
+        assert!(has_edge(&file, "calls", "track"));
+        assert!(has_local_edge(&file, "routes_to", "/dashboard", "+page"));
+    }
+
+    #[test]
+    fn extracts_vue_routes_components_and_script_setup_bridges() {
+        let file = parsed(
+            "src/pages/users/[id].vue",
+            r#"<script setup lang="ts">
+import ProfileCard from "../ProfileCard.vue";
+const save = () => submit();
+function submit() {}
+</script>
+<template><ProfileCard @click="save" /></template>
+"#,
+        );
+        assert!(has_node(&file, "component", "[id]"));
+        assert!(has_node(&file, "route", "/users/:id"));
+        assert!(has_node(&file, "function", "save"));
+        assert!(has_edge(&file, "renders", "ProfileCard"));
+        assert!(has_edge(&file, "binds", "save"));
+        assert!(has_edge(&file, "calls", "submit"));
+        assert!(has_local_edge(&file, "routes_to", "/users/:id", "[id]"));
+    }
+
+    #[test]
+    fn extracts_astro_routes_components_and_frontmatter_bridges() {
+        let file = parsed(
+            "src/pages/blog/[slug].astro",
+            r#"---
+import Layout from "../../layouts/Layout.astro";
+function load() { fetchPost(); }
+function fetchPost() {}
+---
+<Layout onClick={load}><article>Post</article></Layout>
+"#,
+        );
+        assert!(has_node(&file, "component", "[slug]"));
+        assert!(has_node(&file, "route", "/blog/:slug"));
+        assert!(has_node(&file, "function", "load"));
+        assert!(has_edge(&file, "imports", "Layout"));
+        assert!(has_edge(&file, "renders", "Layout"));
+        assert!(has_edge(&file, "binds", "load"));
+        assert!(has_edge(&file, "calls", "fetchPost"));
+        assert!(has_local_edge(&file, "routes_to", "/blog/:slug", "[slug]"));
+    }
+
+    #[test]
+    fn extracts_liquid_render_and_output_bridges() {
+        let file = parsed(
+            "snippets/card.liquid",
+            "<article>{{ product.title }}</article>{% render 'badge' %}",
+        );
+        assert!(has_node(&file, "component", "card"));
+        assert!(has_edge(&file, "binds", "product"));
+        assert!(has_edge(&file, "renders", "badge"));
+    }
+
+    #[test]
     fn language_registry_is_the_discovery_contract() {
         let supported = adapters::supported_languages();
-        assert_eq!(supported.len(), 17);
+        assert_eq!(supported.len(), 21);
         for path in [
             "lib.rs",
             "app.tsx",
@@ -703,6 +892,10 @@ mod tests {
             "app.dart",
             "app.lua",
             "app.luau",
+            "Page.svelte",
+            "Page.vue",
+            "Page.astro",
+            "page.liquid",
         ] {
             assert!(adapters::for_path(Path::new(path)).is_some(), "{path}");
         }
@@ -844,6 +1037,67 @@ mod tests {
                 .iter()
                 .any(|edge| { edge.target == header && index.graph.atom(edge.kind) == "imports" })
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refresh_resolves_web_routes_components_and_embedded_handlers() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "spectra-web-bridge-test-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(root.join("src/routes")).unwrap();
+        fs::create_dir_all(root.join("src/lib")).unwrap();
+        fs::write(
+            root.join("src/routes/+page.svelte"),
+            r#"<script lang="ts">
+import Card from "$lib/Card.svelte";
+function handleClick() {}
+</script>
+<Card on:click={handleClick} />
+"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/lib/Card.svelte"),
+            "<article><slot /></article>\n",
+        )
+        .unwrap();
+
+        let (index, report) = CodeIndex::refresh(&root).unwrap();
+        assert_eq!(report.files, 2);
+        assert_eq!(index.version, 3);
+        let find = |kind: &str, label: &str| {
+            index
+                .graph
+                .nodes
+                .iter()
+                .find(|node| {
+                    index.graph.kind(node.id) == kind && index.graph.atom(node.label) == label
+                })
+                .unwrap()
+                .id
+        };
+        let route = find("route", "/");
+        let page = find("component", "+page");
+        let card = find("component", "Card");
+        let handler = find("function", "handleClick");
+        for (source, target, kind) in [
+            (route, page, "routes_to"),
+            (page, card, "renders"),
+            (page, handler, "binds"),
+            (page, handler, "contains"),
+        ] {
+            assert!(index.graph.edges.iter().any(|edge| {
+                edge.source == source
+                    && edge.target == target
+                    && index.graph.atom(edge.kind) == kind
+            }));
+        }
         fs::remove_dir_all(root).unwrap();
     }
 }
