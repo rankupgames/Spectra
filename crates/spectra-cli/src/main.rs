@@ -203,16 +203,7 @@ fn print_agent_report(report: agents::Report) -> Result<(), Box<dyn std::error::
 }
 
 fn print_anchors(artifact: &spectra_core::MapArtifact) {
-    for (id, anchor) in &artifact.anchors {
-        println!(
-            "{id}={}:{}-{}",
-            anchor.path, anchor.start_line, anchor.end_line
-        );
-    }
-    println!(
-        "nodes={} truncated={} index=v{}",
-        artifact.node_count, artifact.truncated, artifact.index_version
-    );
+    println!("{}", artifact.compact_metadata());
 }
 
 fn display_relative<'a>(path: &'a Path, project: &'a Path) -> String {

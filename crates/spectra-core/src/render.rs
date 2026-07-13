@@ -26,6 +26,7 @@ pub struct MapArtifact {
     pub png_path: PathBuf,
     pub svg_path: PathBuf,
     pub anchors: Vec<(String, SourceAnchor)>,
+    pub relations: Vec<MapRelation>,
     pub truncated: bool,
     pub node_count: usize,
     pub index_version: u32,
@@ -33,9 +34,47 @@ pub struct MapArtifact {
 
 #[derive(Clone, Debug)]
 pub struct SourceAnchor {
+    pub kind: String,
+    pub qualified_name: String,
     pub path: String,
     pub start_line: u32,
     pub end_line: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct MapRelation {
+    pub source: String,
+    pub kind: String,
+    pub target: String,
+}
+
+impl MapArtifact {
+    pub fn compact_metadata(&self) -> String {
+        let mut lines = Vec::with_capacity(self.anchors.len() + self.relations.len() + 1);
+        for (id, anchor) in &self.anchors {
+            lines.push(format!(
+                "{id}={} {} @ {}:{}-{}",
+                compact_field(&anchor.kind, 24),
+                compact_field(&anchor.qualified_name, 80),
+                anchor.path,
+                anchor.start_line,
+                anchor.end_line
+            ));
+        }
+        for relation in &self.relations {
+            lines.push(format!(
+                "flow {} -{}-> {}",
+                relation.source,
+                compact_field(&relation.kind, 32),
+                relation.target
+            ));
+        }
+        lines.push(format!(
+            "nodes={} truncated={} index=v{}",
+            self.node_count, self.truncated, self.index_version
+        ));
+        lines.join("\n")
+    }
 }
 
 pub fn render_map(
@@ -53,27 +92,59 @@ pub fn render_map(
     fs::write(&svg_path, svg.as_bytes())?;
     rasterize(&svg, &png_path, options)?;
 
-    let anchors = selection
-        .anchors
-        .iter()
-        .enumerate()
-        .filter_map(|(index_number, id)| {
-            index.spans.get(id).map(|span| {
-                (
-                    format!("N{}", index_number + 1),
-                    SourceAnchor {
-                        path: span.path.clone(),
-                        start_line: span.start_line,
-                        end_line: span.end_line,
-                    },
-                )
-            })
-        })
-        .collect();
+    let mut anchor_ids = BTreeMap::new();
+    let mut anchors = Vec::new();
+    for (index_number, id) in selection.anchors.iter().enumerate() {
+        let Some(span) = index.spans.get(id) else {
+            continue;
+        };
+        let visual_id = format!("N{}", index_number + 1);
+        let label = index.graph.label(*id);
+        anchor_ids.insert(*id, visual_id.clone());
+        anchors.push((
+            visual_id,
+            SourceAnchor {
+                kind: index.graph.kind(*id).to_owned(),
+                qualified_name: index
+                    .qualified_names
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| label.to_owned()),
+                path: span.path.clone(),
+                start_line: span.start_line,
+                end_line: span.end_line,
+            },
+        ));
+    }
+    let mut relation_keys = BTreeSet::new();
+    let mut relations = Vec::new();
+    for edge in &index.graph.edges {
+        let (Some(source), Some(target)) =
+            (anchor_ids.get(&edge.source), anchor_ids.get(&edge.target))
+        else {
+            continue;
+        };
+        if source == target {
+            continue;
+        }
+        let kind = index.graph.atom(edge.kind).to_owned();
+        if !relation_keys.insert((source.clone(), kind.clone(), target.clone())) {
+            continue;
+        }
+        relations.push(MapRelation {
+            source: source.clone(),
+            kind,
+            target: target.clone(),
+        });
+        if relations.len() == 16 {
+            break;
+        }
+    }
     Ok(MapArtifact {
         png_path,
         svg_path,
         anchors,
+        relations,
         truncated: selection.truncated,
         node_count: selection.nodes.len(),
         index_version: index.version,
@@ -327,6 +398,11 @@ fn truncate(value: &str, max: usize) -> String {
         format!("{}…", value.chars().take(max - 1).collect::<String>())
     }
 }
+
+fn compact_field(value: &str, max: usize) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    truncate(&normalized, max)
+}
 fn stable_hash(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf29ce484222325, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
@@ -373,24 +449,38 @@ mod tests {
     fn png_has_the_requested_bounded_dimensions() {
         let mut graph = PackedGraph::default();
         let node = graph.add_node("function", "launch");
+        let target = graph.add_node("method", "execute");
+        graph.add_edge(node, target, "calls").unwrap();
+        graph.add_edge(node, target, "calls").unwrap();
+        graph.add_edge(target, target, "calls").unwrap();
         let index = CodeIndex {
             graph,
-            spans: [(
-                node,
-                SourceSpan {
-                    path: "src/lib.rs".into(),
-                    start_line: 4,
-                    end_line: 9,
-                },
-            )]
+            spans: [
+                (
+                    node,
+                    SourceSpan {
+                        path: "src/lib.rs".into(),
+                        start_line: 4,
+                        end_line: 9,
+                    },
+                ),
+                (
+                    target,
+                    SourceSpan {
+                        path: "src/worker.rs".into(),
+                        start_line: 12,
+                        end_line: 18,
+                    },
+                ),
+            ]
             .into(),
-            qualified_names: [(node, "launch".into())].into(),
+            qualified_names: [(node, "launch".into()), (target, "Worker::execute".into())].into(),
             version: 1,
         };
         let selection = Selection {
-            nodes: vec![node],
-            anchors: vec![node],
-            distances: [(node, 0)].into(),
+            nodes: vec![node, target],
+            anchors: vec![node, target],
+            distances: [(node, 0), (target, 1)].into(),
             truncated: false,
         };
         let output =
@@ -403,10 +493,17 @@ mod tests {
             RenderOptions::default(),
         )
         .unwrap();
-        let bytes = fs::read(artifact.png_path).unwrap();
+        let bytes = fs::read(&artifact.png_path).unwrap();
         assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
         assert_eq!(u32::from_be_bytes(bytes[16..20].try_into().unwrap()), 1536);
         assert_eq!(u32::from_be_bytes(bytes[20..24].try_into().unwrap()), 1024);
+        assert!(
+            artifact
+                .compact_metadata()
+                .contains("N2=method Worker::execute @ src/worker.rs:12-18")
+        );
+        assert_eq!(artifact.relations.len(), 1);
+        assert_eq!(artifact.relations[0].kind, "calls");
         fs::remove_dir_all(output).unwrap();
     }
 

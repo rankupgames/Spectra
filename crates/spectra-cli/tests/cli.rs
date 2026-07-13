@@ -65,7 +65,8 @@ fn init_and_map_complete_end_to_end() {
     );
     let stdout = String::from_utf8(map.stdout).unwrap();
     assert!(stdout.contains("PNG "));
-    assert!(stdout.contains("N1=src/lib.rs:"));
+    assert!(stdout.contains("N1=function entry @ src/lib.rs:"));
+    assert!(stdout.contains("flow N1 -calls-> N2"));
     assert!(root.join(".spectra/index-v4.json").is_file());
     fs::remove_dir_all(root).unwrap();
 }

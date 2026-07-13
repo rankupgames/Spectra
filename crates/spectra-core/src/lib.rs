@@ -14,7 +14,7 @@ pub use index::{CodeIndex, INDEX_VERSION, IndexReport, SourceSpan};
 pub use ledger::{
     LedgerAnchor, LedgerEvent, LedgerEventKind, LedgerProjection, LedgerState, LedgerStore,
 };
-pub use render::{MapArtifact, RenderOptions, SourceAnchor, render_map};
+pub use render::{MapArtifact, MapRelation, RenderOptions, SourceAnchor, render_map};
 pub use select::{Selection, SelectionOptions, select_subgraph};
 
 use std::path::Path;

@@ -599,21 +599,12 @@ fn build_map_result(
 }
 
 fn compact_metadata(artifact: &MapArtifact, sync: Option<&SyncSnapshot>) -> String {
-    let mut lines = Vec::with_capacity(artifact.anchors.len() + 1);
-    for (id, anchor) in &artifact.anchors {
-        lines.push(format!(
-            "{id}={}:{}-{}",
-            anchor.path, anchor.start_line, anchor.end_line
-        ));
-    }
-    lines.push(format!(
-        "nodes={} truncated={} index=v{}",
-        artifact.node_count, artifact.truncated, artifact.index_version
-    ));
+    let mut metadata = artifact.compact_metadata();
     if let Some(sync) = sync {
-        lines.push(sync.compact());
+        metadata.push('\n');
+        metadata.push_str(&sync.compact());
     }
-    lines.join("\n")
+    metadata
 }
 
 pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
@@ -634,7 +625,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::*;
     use rmcp::ServerHandler;
-    use spectra_core::{MapArtifact, SourceAnchor};
+    use spectra_core::{MapArtifact, MapRelation, SourceAnchor};
 
     #[test]
     fn metadata_stays_well_below_the_default_budget() {
@@ -646,6 +637,8 @@ mod tests {
                     (
                         format!("N{number}"),
                         SourceAnchor {
+                            kind: "method".into(),
+                            qualified_name: format!("module_{number}::Worker::execute"),
                             path: format!("src/module_{number}/implementation.rs"),
                             start_line: number * 10,
                             end_line: number * 10 + 8,
@@ -653,12 +646,19 @@ mod tests {
                     )
                 })
                 .collect(),
+            relations: vec![MapRelation {
+                source: "N1".into(),
+                kind: "calls".into(),
+                target: "N2".into(),
+            }],
             truncated: false,
             node_count: 48,
             index_version: 1,
         };
         let metadata = compact_metadata(&artifact, None);
-        assert!(metadata.chars().count().div_ceil(4) < 200);
+        assert!(metadata.chars().count().div_ceil(4) < 400);
+        assert!(metadata.contains("N1=method module_1::Worker::execute @ src/module_1"));
+        assert!(metadata.contains("flow N1 -calls-> N2"));
         assert!(!metadata.contains("fn "));
     }
 
