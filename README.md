@@ -188,7 +188,7 @@ spectra_files(path?, pattern?, format?, includeMetadata?, maxDepth?, projectPath
 
 These tools provide bounded line-numbered source exploration, symbol and relationship queries, impact traversal, source/file views, project inventory, and index health. All support cross-project queries. Configuration values in YAML and properties files are withheld from source responses.
 
-The final metadata line reports watcher health as `autosync=active|degraded pending=N`. Set `SPECTRA_WATCH_DEBOUNCE_MS` to a value from 100 through 60000 to override the default 2000 ms debounce window for unusually bursty repositories.
+The final metadata line reports watcher health as `autosync=active|degraded pending=N`. Watch registration honors repository ignore rules so generated build trees do not consume native watcher resources; macOS also uses an ignore-aware source polling fallback if FSEvents misses a change. Set `SPECTRA_WATCH_DEBOUNCE_MS` to a value from 100 through 60000 to override the default 2000 ms debounce window for unusually bursty repositories.
 
 Automatic configuration is recommended. For a manual setup, register an MCP server named `spectra` that runs:
 

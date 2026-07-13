@@ -1228,6 +1228,7 @@ dependencies = [
  "atomic-write-file",
  "base64",
  "clap",
+ "ignore",
  "jsonc-parser",
  "notify",
  "rmcp",

@@ -10,7 +10,12 @@ use std::{
     time::Duration,
 };
 
-use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use ignore::WalkBuilder;
+#[cfg(not(target_os = "macos"))]
+use notify::RecommendedWatcher as PlatformWatchers;
+use notify::{Event, EventKind, RecursiveMode, Watcher};
+#[cfg(target_os = "macos")]
+use notify::{FsEventWatcher, PollWatcher};
 use spectra_core::{IndexReport, is_supported_path, sync_project};
 
 const DEFAULT_DEBOUNCE_MS: u64 = 2_000;
@@ -125,8 +130,20 @@ struct ProjectSync {
 }
 
 struct ProjectWatcher {
-    watcher: Option<RecommendedWatcher>,
+    stop: mpsc::Sender<WatcherMessage>,
     worker: Option<JoinHandle<()>>,
+}
+
+enum WatcherMessage {
+    Event(notify::Result<Event>),
+    Stop,
+}
+
+#[derive(Default)]
+struct WatchRegistrations {
+    directories: BTreeSet<PathBuf>,
+    #[cfg(target_os = "macos")]
+    sources: BTreeSet<PathBuf>,
 }
 
 impl ProjectWatcher {
@@ -137,10 +154,7 @@ impl ProjectWatcher {
     ) -> notify::Result<Self> {
         fs::create_dir_all(root.join(".spectra")).map_err(notify::Error::io)?;
         let (sender, receiver) = mpsc::channel();
-        let mut watcher = notify::recommended_watcher(move |event| {
-            let _ = sender.send(event);
-        })?;
-        watcher.watch(&root, RecursiveMode::Recursive)?;
+        let (watchers, watched) = platform_watchers(&root, debounce, &sender)?;
 
         {
             let mut state = status
@@ -154,11 +168,11 @@ impl ProjectWatcher {
             .name("spectra-autosync".into())
             .spawn({
                 let root = root.clone();
-                move || run_worker(root, debounce, status, receiver)
+                move || run_worker(root, debounce, status, watchers, watched, receiver)
             })
             .map_err(notify::Error::io)?;
         Ok(Self {
-            watcher: Some(watcher),
+            stop: sender,
             worker: Some(worker),
         })
     }
@@ -166,7 +180,7 @@ impl ProjectWatcher {
 
 impl Drop for ProjectWatcher {
     fn drop(&mut self) {
-        self.watcher.take();
+        let _ = self.stop.send(WatcherMessage::Stop);
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
@@ -228,18 +242,20 @@ fn run_worker(
     root: PathBuf,
     debounce: Duration,
     status: Arc<Mutex<SyncState>>,
-    receiver: Receiver<notify::Result<Event>>,
+    mut watchers: PlatformWatchers,
+    mut watched: WatchRegistrations,
+    receiver: Receiver<WatcherMessage>,
 ) {
     let mut pending = BTreeSet::new();
     loop {
-        let event = if pending.is_empty() {
+        let message = if pending.is_empty() {
             match receiver.recv() {
-                Ok(event) => event,
+                Ok(message) => message,
                 Err(_) => break,
             }
         } else {
             match receiver.recv_timeout(debounce) {
-                Ok(event) => event,
+                Ok(message) => message,
                 Err(RecvTimeoutError::Timeout) => {
                     if reconcile(&root, &status) {
                         pending.clear();
@@ -251,12 +267,22 @@ fn run_worker(
             }
         };
 
-        match event {
-            Ok(event) => {
+        match message {
+            WatcherMessage::Stop => break,
+            WatcherMessage::Event(Ok(event)) => {
+                if watch_layout_changed(&event)
+                    && let Err(error) = reconfigure_watches(&mut watchers, &root, &mut watched)
+                {
+                    let mut state = status
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    state.active = false;
+                    state.last_error = Some(error.to_string());
+                }
                 collect_paths(&root, &event, &mut pending);
                 set_pending(&status, pending.len());
             }
-            Err(error) => {
+            WatcherMessage::Event(Err(error)) => {
                 let mut state = status
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -265,6 +291,158 @@ fn run_worker(
             }
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+struct PlatformWatchers {
+    _native: Option<FsEventWatcher>,
+    directory_poll: PollWatcher,
+    source_poll: PollWatcher,
+}
+
+#[cfg(target_os = "macos")]
+fn platform_watchers(
+    root: &Path,
+    debounce: Duration,
+    sender: &mpsc::Sender<WatcherMessage>,
+) -> notify::Result<(PlatformWatchers, WatchRegistrations)> {
+    let native_sender = sender.clone();
+    let native = FsEventWatcher::new(
+        move |event| {
+            let _ = native_sender.send(WatcherMessage::Event(event));
+        },
+        notify::Config::default(),
+    )
+    .and_then(|mut watcher| {
+        watcher.watch(root, RecursiveMode::Recursive)?;
+        Ok(watcher)
+    })
+    .ok();
+
+    let poll_interval = debounce.min(Duration::from_secs(1));
+    let directory_sender = sender.clone();
+    let directory_poll = PollWatcher::new(
+        move |event| {
+            let _ = directory_sender.send(WatcherMessage::Event(event));
+        },
+        notify::Config::default().with_poll_interval(poll_interval),
+    )?;
+    let source_sender = sender.clone();
+    let source_poll = PollWatcher::new(
+        move |event| {
+            let _ = source_sender.send(WatcherMessage::Event(event));
+        },
+        notify::Config::default()
+            .with_poll_interval(poll_interval)
+            .with_compare_contents(true),
+    )?;
+    let mut watchers = PlatformWatchers {
+        _native: native,
+        directory_poll,
+        source_poll,
+    };
+    let mut watched = WatchRegistrations::default();
+    reconfigure_watches(&mut watchers, root, &mut watched)?;
+    Ok((watchers, watched))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_watchers(
+    root: &Path,
+    _debounce: Duration,
+    sender: &mpsc::Sender<WatcherMessage>,
+) -> notify::Result<(PlatformWatchers, WatchRegistrations)> {
+    let event_sender = sender.clone();
+    let mut watcher = notify::recommended_watcher(move |event| {
+        let _ = event_sender.send(WatcherMessage::Event(event));
+    })?;
+    let mut watched = WatchRegistrations::default();
+    reconfigure_watches(&mut watcher, root, &mut watched)?;
+    Ok((watcher, watched))
+}
+
+#[cfg(target_os = "macos")]
+fn reconfigure_watches(
+    watchers: &mut PlatformWatchers,
+    root: &Path,
+    watched: &mut WatchRegistrations,
+) -> notify::Result<()> {
+    update_watches(
+        &mut watchers.directory_poll,
+        watch_directories(root),
+        &mut watched.directories,
+    )?;
+    update_watches(
+        &mut watchers.source_poll,
+        watch_source_files(root),
+        &mut watched.sources,
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn reconfigure_watches(
+    watcher: &mut PlatformWatchers,
+    root: &Path,
+    watched: &mut WatchRegistrations,
+) -> notify::Result<()> {
+    update_watches(watcher, watch_directories(root), &mut watched.directories)
+}
+
+fn update_watches<W: Watcher>(
+    watcher: &mut W,
+    desired: BTreeSet<PathBuf>,
+    watched: &mut BTreeSet<PathBuf>,
+) -> notify::Result<()> {
+    for path in watched.difference(&desired) {
+        let _ = watcher.unwatch(path);
+    }
+    for path in desired.difference(watched) {
+        watcher.watch(path, RecursiveMode::NonRecursive)?;
+    }
+    *watched = desired;
+    Ok(())
+}
+
+fn watch_directories(root: &Path) -> BTreeSet<PathBuf> {
+    let mut directories = BTreeSet::new();
+    for entry in WalkBuilder::new(root)
+        .hidden(true)
+        .git_ignore(true)
+        .git_global(true)
+        .build()
+    {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        if entry.file_type().is_some_and(|kind| kind.is_dir()) {
+            directories.insert(entry.into_path());
+        }
+    }
+    directories.insert(root.to_path_buf());
+    directories
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn watch_source_files(root: &Path) -> BTreeSet<PathBuf> {
+    WalkBuilder::new(root)
+        .hidden(true)
+        .git_ignore(true)
+        .git_global(true)
+        .build()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
+        .map(ignore::DirEntry::into_path)
+        .filter(|path| is_supported_path(path))
+        .collect()
+}
+
+fn watch_layout_changed(event: &Event) -> bool {
+    matches!(
+        event.kind,
+        EventKind::Create(_)
+            | EventKind::Remove(_)
+            | EventKind::Modify(notify::event::ModifyKind::Name(_))
+    ) || event.paths.iter().any(|path| is_ignore_control(path))
 }
 
 fn collect_paths(root: &Path, event: &Event, pending: &mut BTreeSet<PathBuf>) {
@@ -407,6 +585,38 @@ mod tests {
             Path::new("/project/.gitignore"),
             &EventKind::Modify(notify::event::ModifyKind::Any)
         ));
+    }
+
+    #[test]
+    fn watch_registration_tracks_only_non_ignored_directories() {
+        let root = temp_root();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::create_dir_all(root.join("src/nested")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn live() {}\n").unwrap();
+        for index in 0..128 {
+            fs::create_dir_all(root.join(format!("target/debug/deps/{index}"))).unwrap();
+        }
+        fs::write(root.join("target/generated.rs"), "pub fn ignored() {}\n").unwrap();
+        fs::write(root.join(".gitignore"), "/target/\n").unwrap();
+
+        let watched = watch_directories(&root);
+        assert!(watched.contains(&root));
+        assert!(watched.contains(&root.join("src")));
+        assert!(watched.contains(&root.join("src/nested")));
+        assert!(
+            !watched
+                .iter()
+                .any(|path| path.starts_with(root.join("target")))
+        );
+        let sources = watch_source_files(&root);
+        assert!(sources.contains(&root.join("src/lib.rs")));
+        assert!(!sources.contains(&root.join("target/generated.rs")));
+
+        fs::remove_file(root.join(".gitignore")).unwrap();
+        let expanded = watch_directories(&root);
+        assert!(expanded.contains(&root.join("target/debug/deps/127")));
+        assert!(watch_source_files(&root).contains(&root.join("target/generated.rs")));
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn wait_for(condition: impl Fn() -> bool) {
