@@ -50,7 +50,11 @@ pub(super) struct JsonTarget {
     pub label: &'static str,
     pub root_key: &'static str,
     pub path: fn() -> Result<PathBuf, BoxError>,
+    pub args: &'static [&'static str],
 }
+
+const STDIO_ARGS: &[&str] = &["serve", "--mcp"];
+const CURSOR_STDIO_ARGS: &[&str] = &["serve", "--mcp", "--path", "${workspaceFolder}"];
 
 pub(crate) fn install(selection: Agent, dry_run: bool) -> Result<Report, BoxError> {
     run_selected(selection, |agent| install_one(agent, dry_run))
@@ -132,26 +136,31 @@ fn json_target(agent: Agent) -> Result<JsonTarget, BoxError> {
             label: "Claude Code",
             root_key: "mcpServers",
             path: claude_path,
+            args: STDIO_ARGS,
         },
         Agent::Cursor => JsonTarget {
             label: "Cursor",
             root_key: "mcpServers",
             path: cursor_path,
+            args: CURSOR_STDIO_ARGS,
         },
         Agent::Gemini => JsonTarget {
             label: "Gemini CLI",
             root_key: "mcpServers",
             path: gemini_path,
+            args: STDIO_ARGS,
         },
         Agent::Antigravity => JsonTarget {
             label: "Antigravity",
             root_key: "mcpServers",
             path: antigravity_path,
+            args: STDIO_ARGS,
         },
         Agent::Kiro => JsonTarget {
             label: "Kiro",
             root_key: "mcpServers",
             path: kiro_path,
+            args: STDIO_ARGS,
         },
         _ => return Err("agent does not use the standard JSON adapter".into()),
     };

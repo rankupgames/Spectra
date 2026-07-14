@@ -72,6 +72,37 @@ fn init_and_map_complete_end_to_end() {
 }
 
 #[test]
+fn mcp_handshake_does_not_index_before_the_first_tool_call() {
+    let root = fixture();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_spectra"))
+        .args(["serve", "--mcp", "--path", root.to_str().unwrap()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"spectra-test","version":"1"}}}
+"#,
+        )
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(r#""name":"spectra""#));
+    assert!(!root.join(".spectra").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn concurrent_sync_processes_serialize_index_and_ledger_writes() {
     let root = fixture();
     for index in 0..200 {
@@ -376,14 +407,31 @@ fn standard_json_agent_installers_are_owned_idempotent_and_reversible() {
         let value: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(value["unrelated"], true);
         assert_eq!(value["mcpServers"]["other"]["command"], "other");
-        assert_eq!(
-            value["mcpServers"]["spectra"]["args"],
+        let expected_args = if agent == "cursor" {
+            serde_json::json!(["serve", "--mcp", "--path", "${workspaceFolder}"])
+        } else {
             serde_json::json!(["serve", "--mcp"])
-        );
+        };
+        assert_eq!(value["mcpServers"]["spectra"]["args"], expected_args);
 
         let second = run("install");
         assert!(second.status.success());
         assert!(String::from_utf8_lossy(&second.stdout).contains("already configured"));
+        if agent == "cursor" {
+            let mut legacy: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            legacy["mcpServers"]["spectra"]["args"] = serde_json::json!(["serve", "--mcp"]);
+            fs::write(&path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+            let migrated = run("install");
+            assert!(migrated.status.success());
+            assert!(String::from_utf8_lossy(&migrated.stdout).contains("updated"));
+            let migrated: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            assert_eq!(
+                migrated["mcpServers"]["spectra"]["args"],
+                serde_json::json!(["serve", "--mcp", "--path", "${workspaceFolder}"])
+            );
+        }
         let status = run("status");
         assert!(status.status.success());
         assert!(String::from_utf8_lossy(&status.stdout).contains("MCP=current"));
