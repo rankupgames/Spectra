@@ -1,0 +1,7 @@
+{"session_id":"claude-session","hook_event_name":"SessionStart","source":"startup","cwd":"$PROJECT"}
+{"session_id":"claude-session","hook_event_name":"PostToolUse","cwd":"$PROJECT","tool_name":"Write","tool_use_id":"edit-1","tool_input":{"file_path":"src/lib.rs","content":"private body"},"tool_response":{"success":true}}
+{"session_id":"claude-session","hook_event_name":"PostToolUse","cwd":"$PROJECT","tool_name":"Bash","tool_use_id":"check-1","tool_input":{"command":"cargo test --workspace"},"tool_response":{"exit_code":101,"output":"test failed"}}
+{"session_id":"claude-session","hook_event_name":"PostToolUse","cwd":"$PROJECT","tool_name":"Edit","tool_use_id":"edit-2","tool_input":{"file_path":"src/lib.rs","old_string":"private","new_string":"fixed"},"tool_response":{"success":true}}
+{"session_id":"claude-session","hook_event_name":"PostToolUse","cwd":"$PROJECT","tool_name":"Bash","tool_use_id":"check-2","tool_input":{"command":"cargo test --workspace"},"tool_response":{"exit_code":0,"output":"all tests passed"}}
+{"session_id":"claude-session","hook_event_name":"Stop","cwd":"$PROJECT","stop_hook_active":false}
+{"session_id":"claude-session","hook_event_name":"UserPromptSubmit","cwd":"$PROJECT","prompt":"what remains?"}

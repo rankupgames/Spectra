@@ -81,14 +81,21 @@ It records projection token reduction, exact state-fact retention, durable appen
 
 Both model arms use identical state-recovery instructions. The evaluator records provider input/output/reasoning tokens, cost, answers, and arm-agnostic fact recall. Controlled transcripts are useful for regression but do not replace later evaluation on captured live-agent sessions.
 
-The Codex hook adapter also has a recorded-wire backtest fixture at [`fixtures/codex-hook-session.jsonl`](fixtures/codex-hook-session.jsonl). The CLI acceptance test replays each lifecycle payload through a separate `spectra hook` process, including duplicate edit delivery, a failed verification, repair, successful verification, stop, and projection reinjection. It requires:
+Recorded-wire backtest fixtures cover [Codex](fixtures/codex-hook-session.jsonl), [Claude Code](fixtures/claude-hook-session.jsonl), [Gemini CLI](fixtures/gemini-hook-session.jsonl), and [Cursor](fixtures/cursor-hook-session.jsonl). CLI acceptance tests replay each lifecycle payload through a separate `spectra hook --agent <agent>` process, including duplicate delivery, a failed verification, repair, successful verification, completion, and projection reinjection where the provider supports it. They require:
 
 - final state `Complete`
 - exact edited-path and verification fact retention
 - fewer than 150 estimated projection tokens and fewer than 200 injected-context tokens
 - no duplicate immutable event after retry
+- provider-valid stdout and secret exclusion
+
+Codex, Claude, and Gemini must retain equivalent session facts. Cursor is gated separately as `topology+ledger-partial` and may reinject only at session start.
 
 The post-hook deterministic regression must preserve the 93.4% median reduction and 100% minimum fact-recall baselines recorded during prototype development.
+
+## Agent efficiency scenarios
+
+[`fixtures/efficiency-tool-scenarios.json`](fixtures/efficiency-tool-scenarios.json) freezes three common agent workflows: resuming after failed verification, discovering worktree impact and tests, and tracing an A-to-B flow. The release test compares the previous focused-query call count with the composite `brief`, `changes`, or `path` call and requires at least 40% fewer median calls. Separate query tests gate token budgets, changed-path and verification retention, deterministic paths, session isolation, and exclusion of raw diffs, source bodies, terminal output, and credentials.
 
 ## Grok multimodal evaluation
 

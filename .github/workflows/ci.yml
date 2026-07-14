@@ -34,3 +34,5 @@ jobs:
         with:
           toolchain: 1.88.0
       - run: cargo test --workspace --locked
+      - run: cargo test --workspace --locked -- --test-threads=1
+      - run: cargo build --release --workspace --locked

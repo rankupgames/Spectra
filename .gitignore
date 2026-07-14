@@ -3,3 +3,4 @@
 /.codegraph/
 /.env
 /benchmarks/results/
+.DS_Store

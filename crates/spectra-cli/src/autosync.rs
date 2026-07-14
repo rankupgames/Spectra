@@ -541,7 +541,10 @@ mod tests {
         assert_eq!(initial.sync_count, 1);
 
         fs::write(&source, "pub fn second() {}\n").unwrap();
-        wait_for(|| autosync.status(&root).sync_count > initial.sync_count);
+        wait_for(|| {
+            let status = autosync.status(&root);
+            status.sync_count > initial.sync_count && status.pending == 0
+        });
         let (changed, warm) = CodeIndex::refresh(&root).unwrap();
         assert_eq!(warm.changed, 0);
         assert!(
@@ -554,7 +557,10 @@ mod tests {
 
         let after_change = autosync.status(&root).sync_count;
         fs::remove_file(&source).unwrap();
-        wait_for(|| autosync.status(&root).sync_count > after_change);
+        wait_for(|| {
+            let status = autosync.status(&root);
+            status.sync_count > after_change && status.pending == 0
+        });
         let (_, warm) = CodeIndex::refresh(&root).unwrap();
         assert_eq!(warm.removed, 0);
 

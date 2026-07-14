@@ -1,0 +1,5 @@
+{"conversation_id":"cursor-session","hook_event_name":"sessionStart","workspace_roots":["$PROJECT"]}
+{"conversation_id":"cursor-session","hook_event_name":"afterFileEdit","workspace_roots":["$PROJECT"],"file_path":"src/lib.rs"}
+{"conversation_id":"cursor-session","hook_event_name":"afterShellExecution","workspace_roots":["$PROJECT"],"command":"cargo test --workspace","exit_code":0,"output":"all tests passed"}
+{"conversation_id":"cursor-session","hook_event_name":"stop","workspace_roots":["$PROJECT"],"status":"completed"}
+{"conversation_id":"cursor-session","hook_event_name":"sessionStart","workspace_roots":["$PROJECT"]}
