@@ -7,7 +7,6 @@ pub enum Error {
     Index(String),
     Parse(String),
     Graph(String),
-    Render(String),
     Ledger(String),
     InvalidProject(String),
 }
@@ -20,7 +19,6 @@ impl fmt::Display for Error {
             Self::Index(message) => write!(f, "index error: {message}"),
             Self::Parse(message) => write!(f, "parse error: {message}"),
             Self::Graph(message) => write!(f, "invalid graph: {message}"),
-            Self::Render(message) => write!(f, "render error: {message}"),
             Self::Ledger(message) => write!(f, "ledger error: {message}"),
             Self::InvalidProject(message) => write!(f, "invalid project: {message}"),
         }

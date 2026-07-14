@@ -15,7 +15,8 @@ use std::{
 
 use agents::{Agent, Location};
 use clap::{Parser, Subcommand, ValueEnum};
-use spectra_core::{CodeIndex, INDEX_VERSION, IndexReport, map_project, sync_project};
+use spectra_core::{CodeIndex, INDEX_VERSION, IndexReport, sync_project};
+use spectra_render::{MapArtifact, map_project};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -551,7 +552,7 @@ fn confirm_install(
     ))
 }
 
-fn print_anchors(artifact: &spectra_core::MapArtifact) {
+fn print_anchors(artifact: &MapArtifact) {
     println!("{}", artifact.compact_metadata());
 }
 

@@ -1236,6 +1236,7 @@ dependencies = [
  "serde",
  "serde_json",
  "spectra-context-core",
+ "spectra-context-render",
  "tokio",
 ]
 
@@ -1245,10 +1246,8 @@ version = "0.3.0"
 dependencies = [
  "atomic-write-file",
  "ignore",
- "resvg",
  "serde",
  "serde_json",
- "tiny-skia",
  "tree-sitter",
  "tree-sitter-astro-next",
  "tree-sitter-c",
@@ -1273,6 +1272,15 @@ dependencies = [
  "tree-sitter-swift",
  "tree-sitter-typescript",
  "tree-sitter-vue-next",
+]
+
+[[package]]
+name = "spectra-context-render"
+version = "0.3.0"
+dependencies = [
+ "resvg",
+ "spectra-context-core",
+ "tiny-skia",
 ]
 
 [[package]]

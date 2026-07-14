@@ -1,5 +1,9 @@
 [workspace]
-members = ["crates/spectra-core", "crates/spectra-cli"]
+members = [
+    "crates/spectra-cli",
+    "crates/spectra-core",
+    "crates/spectra-render",
+]
 resolver = "2"
 
 [workspace.package]

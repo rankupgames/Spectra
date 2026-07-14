@@ -14,7 +14,8 @@ use rmcp::{
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
-use spectra_core::{LedgerSource, MapArtifact, map_project};
+use spectra_core::LedgerSource;
+use spectra_render::{MapArtifact, map_project};
 
 use crate::autosync::{AutoSync, SyncSnapshot};
 use crate::mcp_query::{
@@ -873,7 +874,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::*;
     use rmcp::ServerHandler;
-    use spectra_core::{MapArtifact, MapRelation, SourceAnchor};
+    use spectra_render::{MapArtifact, MapRelation, SourceAnchor};
 
     #[test]
     fn metadata_stays_well_below_the_default_budget() {
