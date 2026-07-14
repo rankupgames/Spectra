@@ -23,7 +23,7 @@ pub(super) fn install(target: JsonTarget, dry_run: bool) -> Result<String, BoxEr
     let servers = object_field(&mut root, target.root_key, &path)?;
     let ownership = servers
         .get("spectra")
-        .map(|entry| standard_ownership(entry, &executable))
+        .map(|entry| standard_ownership(entry, &executable, target.args))
         .transpose()?;
     if ownership == Some(Ownership::Foreign) {
         return Err(format!(
@@ -50,7 +50,7 @@ pub(super) fn install(target: JsonTarget, dry_run: bool) -> Result<String, BoxEr
             path.display()
         ));
     }
-    servers.insert("spectra".into(), standard_entry(&executable)?);
+    servers.insert("spectra".into(), standard_entry(&executable, target.args)?);
     write_json(&path, &Value::Object(root))?;
     Ok(format!(
         "{}: Spectra topology MCP {}. Restart the agent if it is running.",
@@ -80,7 +80,7 @@ pub(super) fn uninstall(target: JsonTarget, dry_run: bool) -> Result<String, Box
     let Some(entry) = servers.get("spectra") else {
         return Ok(format!("{}: Spectra is not configured.", target.label));
     };
-    if standard_ownership(entry, &executable)? == Ownership::Foreign {
+    if standard_ownership(entry, &executable, target.args)? == Ownership::Foreign {
         return Err(format!(
             "{}'s 'spectra' MCP entry is not owned by Spectra; refusing to remove it",
             target.label
@@ -118,7 +118,7 @@ pub(super) fn status(target: JsonTarget) -> Result<String, BoxError> {
     .and_then(|servers| servers.get("spectra"));
     let mcp = match entry {
         None => "missing",
-        Some(entry) => match standard_ownership(entry, &executable)? {
+        Some(entry) => match standard_ownership(entry, &executable, target.args)? {
             Ownership::Current => "current",
             Ownership::Stale => "stale",
             Ownership::Foreign => "foreign conflict",
@@ -127,7 +127,11 @@ pub(super) fn status(target: JsonTarget) -> Result<String, BoxError> {
     Ok(format!("{}: MCP={mcp}, Ledger=not available", target.label))
 }
 
-pub(super) fn standard_ownership(entry: &Value, current: &Path) -> Result<Ownership, BoxError> {
+pub(super) fn standard_ownership(
+    entry: &Value,
+    current: &Path,
+    expected_args: &[&str],
+) -> Result<Ownership, BoxError> {
     let command = entry
         .get("command")
         .and_then(Value::as_str)
@@ -136,11 +140,12 @@ pub(super) fn standard_ownership(entry: &Value, current: &Path) -> Result<Owners
         .get("args")
         .and_then(Value::as_array)
         .ok_or("stdio MCP configuration has no args array")?;
-    let args_match = string_array_is(args, &["serve", "--mcp"]);
+    let args_match = string_array_is(args, expected_args);
+    let managed_args = args_match || string_array_is(args, &["serve", "--mcp"]);
     let configured = PathBuf::from(command);
     if args_match && resolved(&configured) == current {
         Ok(Ownership::Current)
-    } else if args_match && configured_command_is_spectra(&configured) {
+    } else if managed_args && configured_command_is_spectra(&configured) {
         Ok(Ownership::Stale)
     } else {
         Ok(Ownership::Foreign)
@@ -180,11 +185,11 @@ pub(super) fn opencode_entry(executable: &Path) -> Result<Value, BoxError> {
     }))
 }
 
-fn standard_entry(executable: &Path) -> Result<Value, BoxError> {
+fn standard_entry(executable: &Path, args: &[&str]) -> Result<Value, BoxError> {
     let executable = executable
         .to_str()
         .ok_or("Spectra executable path is not valid UTF-8")?;
-    Ok(json!({"command": executable, "args": ["serve", "--mcp"]}))
+    Ok(json!({"command": executable, "args": args}))
 }
 
 fn string_array_is(values: &[Value], expected: &[&str]) -> bool {

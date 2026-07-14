@@ -449,7 +449,7 @@ impl SpectraServer {
 
 #[tool_handler(
     name = "spectra",
-    version = "0.2.0",
+    version = "0.2.1",
     instructions = "Use spectra_map for visual architecture questions. Enable spectra_explore for bounded source and flow context; targeted search, node, caller/callee, impact, file-tree, and status tools are available through SPECTRA_MCP_TOOLS."
 )]
 impl ServerHandler for SpectraServer {
@@ -609,13 +609,6 @@ fn compact_metadata(artifact: &MapArtifact, sync: Option<&SyncSnapshot>) -> Stri
 
 pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let server = SpectraServer::default();
-    let status = server.autosync.ensure_project(&std::env::current_dir()?);
-    eprintln!("spectra: {}", status.compact());
-    if !status.active {
-        eprintln!(
-            "spectra: live watching is degraded; use `spectra autosync install` for Git-based fallback"
-        );
-    }
     let service = server.serve(rmcp::transport::stdio()).await?;
     service.waiting().await?;
     Ok(())

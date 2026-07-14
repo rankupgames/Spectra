@@ -3,7 +3,7 @@
 **A smaller, more useful memory for local AI coding agents.**
 
 [![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-CE412B?logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![Version: 0.2.0](https://img.shields.io/badge/Version-0.2.0-38BDF8.svg)](https://github.com/rankupgames/Spectra/releases/tag/v0.2.0)
+[![Version: 0.2.1](https://img.shields.io/badge/Version-0.2.1-38BDF8.svg)](https://github.com/rankupgames/Spectra/releases/tag/v0.2.1)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22C55E.svg)](LICENSE)
 [![Status: Prototype](https://img.shields.io/badge/Status-Prototype-F59E0B.svg)](#project-status)
 
@@ -49,7 +49,7 @@ These numbers come from nine frozen prompts across pinned ripgrep, Tokio, and ru
 
 ## Quickstart
 
-Spectra does not have prebuilt binaries yet, but Cargo can install the tagged v0.2.0 release directly from GitHub:
+Spectra does not have prebuilt binaries yet, but Cargo can install the tagged v0.2.1 release directly from GitHub:
 
 ### Requirements
 
@@ -62,7 +62,7 @@ Any MCP client can also run `spectra serve --mcp` manually.
 ### 1. Install Spectra
 
 ```sh
-cargo install --git https://github.com/rankupgames/Spectra.git --tag v0.2.0 --bin spectra --locked
+cargo install --git https://github.com/rankupgames/Spectra.git --tag v0.2.1 --bin spectra --locked
 ```
 
 ### 2. Connect your agents

@@ -81,6 +81,9 @@ enum Command {
     Serve {
         #[arg(long)]
         mcp: bool,
+        /// Default project directory for MCP tool calls.
+        #[arg(long)]
+        path: Option<PathBuf>,
     },
 }
 
@@ -178,8 +181,20 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             println!("SVG {}", display_relative(&artifact.svg_path, &path));
             print_anchors(&artifact);
         }
-        Command::Serve { mcp: true } => mcp::serve().await?,
-        Command::Serve { mcp: false } => return Err("serve currently requires --mcp".into()),
+        Command::Serve {
+            mcp: true,
+            path: Some(path),
+        } => {
+            std::env::set_current_dir(path)?;
+            mcp::serve().await?;
+        }
+        Command::Serve {
+            mcp: true,
+            path: None,
+        } => mcp::serve().await?,
+        Command::Serve { mcp: false, .. } => {
+            return Err("serve currently requires --mcp".into());
+        }
     }
     Ok(())
 }
