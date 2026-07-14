@@ -2,10 +2,14 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fs,
     path::{Path, PathBuf},
+    process::Command,
 };
 
+use spectra_core::ledger::redact_text;
 use spectra_core::{
-    CodeIndex, IndexReport, SelectionOptions, graph::NodeId, select_subgraph, supported_languages,
+    CodeIndex, IndexReport, LedgerEventKind, LedgerSource, LedgerStore, SelectionOptions,
+    graph::{EdgeId, NodeId},
+    select_subgraph, supported_languages,
 };
 
 use crate::autosync::{AutoSync, SyncSnapshot};
@@ -41,6 +45,37 @@ pub(crate) struct NodeViewOptions<'a> {
     pub(crate) offset: Option<usize>,
     pub(crate) limit: Option<usize>,
     pub(crate) symbols_only: bool,
+}
+
+pub(crate) struct BriefOptions<'a> {
+    pub(crate) query: &'a str,
+    pub(crate) token_budget: usize,
+    pub(crate) include_source: bool,
+    pub(crate) source: Option<LedgerSource>,
+}
+
+pub(crate) struct ChangeOptions<'a> {
+    pub(crate) base: &'a str,
+    pub(crate) paths: Option<&'a [String]>,
+    pub(crate) depth: usize,
+    pub(crate) include_tests: bool,
+    pub(crate) token_budget: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PathMode {
+    Execution,
+    Dependency,
+    Any,
+}
+
+pub(crate) struct PathOptions<'a> {
+    pub(crate) from: &'a str,
+    pub(crate) to: &'a str,
+    pub(crate) from_file: Option<&'a str>,
+    pub(crate) to_file: Option<&'a str>,
+    pub(crate) mode: PathMode,
+    pub(crate) max_hops: usize,
 }
 
 pub(crate) fn open_project(
@@ -213,6 +248,15 @@ pub(crate) fn impact(view: &ProjectView, symbol: &str, file: Option<&str>, depth
 }
 
 pub(crate) fn explore(view: &ProjectView, query: &str, max_files: usize) -> String {
+    explore_budgeted(view, query, max_files, MAX_TEXT)
+}
+
+pub(crate) fn explore_budgeted(
+    view: &ProjectView,
+    query: &str,
+    max_files: usize,
+    max_chars: usize,
+) -> String {
     let selection = select_subgraph(&view.index, query, SelectionOptions { max_nodes: 96 });
     let selected = selection.nodes.iter().copied().collect::<BTreeSet<_>>();
     let mut by_file: BTreeMap<String, Vec<NodeId>> = BTreeMap::new();
@@ -285,6 +329,241 @@ pub(crate) fn explore(view: &ProjectView, query: &str, max_files: usize) -> Stri
         view.index.version,
         view.sync.compact()
     ));
+    bounded(sections.join("\n"), max_chars.clamp(512, MAX_TEXT))
+}
+
+pub(crate) fn brief(view: &ProjectView, options: BriefOptions<'_>) -> String {
+    let token_budget = options.token_budget.clamp(128, 2_000);
+    let max_chars = token_budget * 4;
+    let selection = select_subgraph(
+        &view.index,
+        options.query,
+        SelectionOptions { max_nodes: 48 },
+    );
+    let continuity = match LedgerStore::open(&view.root) {
+        Ok(ledger) => options
+            .source
+            .as_ref()
+            .map(|source| ledger.projection_for(source).text)
+            .unwrap_or_else(|| ledger.project_facts().text),
+        Err(error) => format!("continuity unavailable: {error}"),
+    };
+    let mut sections = vec![
+        "# Spectra brief".into(),
+        format!("goal={}", redact_text(options.query)),
+        format!("sync={}", view.sync.compact()),
+        String::new(),
+        "## Continuity".into(),
+        continuity,
+        String::new(),
+        "## Ranked anchors".into(),
+    ];
+    let anchors = selection
+        .nodes
+        .iter()
+        .copied()
+        .filter(|node| view.index.graph.kind(*node) != "file")
+        .take(12)
+        .collect::<Vec<_>>();
+    if anchors.is_empty() {
+        sections.push("No matching indexed anchors.".into());
+    } else {
+        sections.extend(anchors.iter().map(|node| format_node(view, *node, None)));
+    }
+    let boundaries = anchors
+        .iter()
+        .filter(|node| view.index.graph.kind(**node) == "boundary")
+        .map(|node| view.index.graph.label(*node))
+        .collect::<BTreeSet<_>>();
+    if !boundaries.is_empty() {
+        sections.push(String::new());
+        sections.push(format!(
+            "uncertain_boundaries={}",
+            boundaries.into_iter().collect::<Vec<_>>().join(",")
+        ));
+    }
+    if options.include_source {
+        let mut by_file: BTreeMap<&str, Vec<NodeId>> = BTreeMap::new();
+        for node in &anchors {
+            if let Some(path) = node_path(view, *node) {
+                by_file.entry(path).or_default().push(*node);
+            }
+        }
+        if !by_file.is_empty() {
+            sections.push(String::new());
+            sections.push("## Bounded source".into());
+            for (path, nodes) in by_file.into_iter().take(3) {
+                sections.push(format!("**`{path}`**"));
+                match source_window(view, path, &nodes, 24, 2_400) {
+                    Ok(source) => sections.push(redact_text(&source)),
+                    Err(error) => sections.push(format!("> Source unavailable: {error}")),
+                }
+            }
+        }
+    }
+    sections.push(String::new());
+    sections.push(if let Some(node) = anchors.first() {
+        format!(
+            "next=spectra_node symbol={} file={}",
+            view.index.graph.label(*node),
+            node_path(view, *node).unwrap_or("<unknown>")
+        )
+    } else {
+        "next=refine the brief query".into()
+    });
+    bounded(sections.join("\n"), max_chars)
+}
+
+pub(crate) fn changes(view: &ProjectView, options: ChangeOptions<'_>) -> String {
+    let token_budget = options.token_budget.clamp(128, 2_000);
+    let discovered = discover_changes(view, options.base, options.paths);
+    let mut direct = BTreeSet::new();
+    for (path, ranges) in &discovered.paths {
+        for node in nodes_in_file(view, path) {
+            let overlaps = ranges.is_empty()
+                || view.index.spans.get(&node).is_some_and(|span| {
+                    ranges
+                        .iter()
+                        .any(|(start, end)| span.start_line <= *end && span.end_line >= *start)
+                });
+            if overlaps {
+                direct.insert(node);
+            }
+        }
+    }
+    let impact_ranks = incoming_impact(view, &direct, options.depth.clamp(1, 10));
+    let impact = impact_ranks.keys().copied().collect::<BTreeSet<_>>();
+    let mut tests = direct
+        .iter()
+        .chain(impact.iter())
+        .copied()
+        .filter(|node| node_path(view, *node).is_some_and(is_test_path))
+        .map(|node| (impact_ranks.get(&node).copied().unwrap_or(0), node))
+        .collect::<Vec<_>>();
+    tests.sort_by_key(|(distance, node)| {
+        (
+            *distance,
+            node_path(view, *node).unwrap_or(""),
+            view.index.graph.label(*node),
+        )
+    });
+    let mut sections = vec![
+        "# Spectra changes".into(),
+        format!("provenance={}", discovered.provenance),
+        format!(
+            "files={} direct_symbols={} affected_symbols={}",
+            discovered.paths.len(),
+            direct.len(),
+            impact.len()
+        ),
+        String::new(),
+        "## Changed files".into(),
+    ];
+    if discovered.paths.is_empty() {
+        sections.push("No changed paths discovered.".into());
+    } else {
+        for (path, ranges) in &discovered.paths {
+            let suffix = if discovered.deleted.contains(path) {
+                " deleted".to_owned()
+            } else if ranges.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " lines={}",
+                    ranges
+                        .iter()
+                        .map(|(start, end)| format!("{start}-{end}"))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            };
+            sections.push(format!("- {path}{suffix}"));
+        }
+    }
+    append_node_section(view, &mut sections, "Directly changed symbols", &direct, 24);
+    append_node_section(view, &mut sections, "Affected symbols", &impact, 32);
+    if options.include_tests && !tests.is_empty() {
+        sections.push(String::new());
+        sections.push("## Ranked tests".into());
+        sections.extend(
+            tests
+                .into_iter()
+                .take(24)
+                .enumerate()
+                .map(|(rank, (distance, node))| {
+                    format!(
+                        "{}. distance={distance} {}",
+                        rank + 1,
+                        format_node(view, node, None).trim_start_matches("- ")
+                    )
+                }),
+        );
+    }
+    bounded(sections.join("\n"), token_budget * 4)
+}
+
+pub(crate) fn typed_paths(view: &ProjectView, options: PathOptions<'_>) -> String {
+    let from = symbol_nodes(view, options.from, options.from_file);
+    let to = symbol_nodes(view, options.to, options.to_file);
+    if from.len() != 1 {
+        return endpoint_candidates(view, "from", options.from, &from);
+    }
+    if to.len() != 1 {
+        return endpoint_candidates(view, "to", options.to, &to);
+    }
+    let start = from[0];
+    let target = to[0];
+    let paths = shortest_paths(
+        view,
+        start,
+        target,
+        options.mode,
+        options.max_hops.clamp(1, 20),
+        3,
+    );
+    if paths.is_empty() {
+        let reverse = shortest_paths(
+            view,
+            target,
+            start,
+            options.mode,
+            options.max_hops.clamp(1, 20),
+            1,
+        );
+        return if reverse.is_empty() {
+            format!(
+                "No directed {:?} path found from {} to {} within {} hops.",
+                options.mode, options.from, options.to, options.max_hops
+            )
+        } else {
+            format!(
+                "No directed {:?} path found from {} to {}; a reverse path exists from {} to {}.",
+                options.mode, options.from, options.to, options.to, options.from
+            )
+        };
+    }
+    let mut sections = vec![format!(
+        "# Spectra paths: {} → {} ({:?})",
+        options.from, options.to, options.mode
+    )];
+    for (index, path) in paths.iter().enumerate() {
+        sections.push(String::new());
+        sections.push(format!("## Path {} ({} hops)", index + 1, path.len()));
+        sections.push(format_node(view, start, None));
+        let mut current = start;
+        for edge_id in path {
+            let Some(edge) = view.index.graph.edge(*edge_id) else {
+                continue;
+            };
+            debug_assert_eq!(edge.source, current);
+            sections.push(format!(
+                "  -{}→ {}",
+                view.index.graph.atom(edge.kind),
+                format_node(view, edge.target, None).trim_start_matches("- ")
+            ));
+            current = edge.target;
+        }
+    }
     bounded(sections.join("\n"), MAX_TEXT)
 }
 
@@ -416,6 +695,343 @@ pub(crate) fn files(
         FileFormat::Tree => format_files_tree(&files, include_metadata),
     };
     bounded(lines, MAX_TEXT)
+}
+
+struct DiscoveredChanges {
+    provenance: &'static str,
+    paths: BTreeMap<String, Vec<(u32, u32)>>,
+    deleted: BTreeSet<String>,
+}
+
+fn discover_changes(
+    view: &ProjectView,
+    base: &str,
+    explicit: Option<&[String]>,
+) -> DiscoveredChanges {
+    if let Some(paths) = explicit {
+        let paths = paths
+            .iter()
+            .take(64)
+            .map(|path| (normalize_path_filter(path), Vec::new()))
+            .collect::<BTreeMap<_, _>>();
+        let deleted = paths
+            .keys()
+            .filter(|path| !view.root.join(path).exists())
+            .cloned()
+            .collect();
+        return DiscoveredChanges {
+            provenance: "explicit-paths",
+            paths,
+            deleted,
+        };
+    }
+    if !base.is_empty() && base.len() <= 256 && !base.starts_with('-') {
+        let verify = Command::new("git")
+            .args(["-C"])
+            .arg(&view.root)
+            .args(["rev-parse", "--verify", &format!("{base}^{{commit}}")])
+            .output();
+        if let Ok(verify) = verify
+            && verify.status.success()
+        {
+            let resolved = String::from_utf8_lossy(&verify.stdout).trim().to_owned();
+            let names = Command::new("git")
+                .args(["-C"])
+                .arg(&view.root)
+                .args([
+                    "diff",
+                    "--name-only",
+                    "-z",
+                    "--diff-filter=ACMRD",
+                    &resolved,
+                    "--",
+                ])
+                .output();
+            let patch = Command::new("git")
+                .args(["-C"])
+                .arg(&view.root)
+                .args([
+                    "-c",
+                    "core.quotepath=false",
+                    "diff",
+                    "--unified=0",
+                    "--no-color",
+                    &resolved,
+                    "--",
+                ])
+                .output();
+            let untracked = Command::new("git")
+                .args(["-C"])
+                .arg(&view.root)
+                .args(["ls-files", "--others", "--exclude-standard", "-z"])
+                .output();
+            if let (Ok(names), Ok(patch), Ok(untracked)) = (names, patch, untracked)
+                && names.status.success()
+                && patch.status.success()
+                && untracked.status.success()
+            {
+                let mut paths = nul_paths(&names.stdout)
+                    .into_iter()
+                    .map(|path| (path, Vec::new()))
+                    .collect::<BTreeMap<_, _>>();
+                for path in nul_paths(&untracked.stdout) {
+                    paths.entry(path).or_default();
+                }
+                for (path, ranges) in diff_ranges(&String::from_utf8_lossy(&patch.stdout)) {
+                    paths.entry(path).or_default().extend(ranges);
+                }
+                let deleted = paths
+                    .keys()
+                    .filter(|path| !view.root.join(path).exists())
+                    .cloned()
+                    .collect();
+                return DiscoveredChanges {
+                    provenance: "git-worktree",
+                    paths,
+                    deleted,
+                };
+            }
+        }
+    }
+    let mut paths = BTreeMap::new();
+    if let Ok(ledger) = LedgerStore::open(&view.root) {
+        for event in ledger.events().iter().rev() {
+            if let LedgerEventKind::EditApplied { paths: edited }
+            | LedgerEventKind::EditObserved { paths: edited } = &event.kind
+            {
+                for path in edited.iter().take(64) {
+                    paths.entry(normalize_path_filter(path)).or_default();
+                }
+                break;
+            }
+        }
+    }
+    let deleted = paths
+        .keys()
+        .filter(|path| !view.root.join(path).exists())
+        .cloned()
+        .collect();
+    DiscoveredChanges {
+        provenance: "ledger-fallback",
+        paths,
+        deleted,
+    }
+}
+
+fn nul_paths(bytes: &[u8]) -> Vec<String> {
+    bytes
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| normalize_path_filter(&String::from_utf8_lossy(path)))
+        .filter(|path| !path.is_empty())
+        .collect()
+}
+
+fn diff_ranges(diff: &str) -> BTreeMap<String, Vec<(u32, u32)>> {
+    let mut result = BTreeMap::new();
+    let mut path = None;
+    for line in diff.lines() {
+        if let Some(value) = line.strip_prefix("+++ ") {
+            path = value
+                .strip_prefix("b/")
+                .filter(|value| *value != "/dev/null")
+                .map(normalize_path_filter);
+        } else if line.starts_with("@@ ")
+            && let Some(path) = &path
+            && let Some((start, end)) = new_hunk_range(line)
+        {
+            result
+                .entry(path.clone())
+                .or_insert_with(Vec::new)
+                .push((start, end));
+        }
+    }
+    result
+}
+
+fn new_hunk_range(header: &str) -> Option<(u32, u32)> {
+    let added = header
+        .split_whitespace()
+        .find(|part| part.starts_with('+'))?;
+    let mut values = added.trim_start_matches('+').split(',');
+    let start = values.next()?.parse::<u32>().ok()?;
+    let count = values
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(1);
+    Some((start, start.saturating_add(count.saturating_sub(1))))
+}
+
+fn incoming_impact(
+    view: &ProjectView,
+    direct: &BTreeSet<NodeId>,
+    depth: usize,
+) -> BTreeMap<NodeId, usize> {
+    let mut seen = direct
+        .iter()
+        .copied()
+        .map(|node| (node, 0_usize))
+        .collect::<BTreeMap<_, _>>();
+    let mut queue = direct
+        .iter()
+        .copied()
+        .map(|node| (node, 0_usize))
+        .collect::<VecDeque<_>>();
+    while let Some((node, level)) = queue.pop_front() {
+        if level >= depth {
+            continue;
+        }
+        for edge_id in view.index.graph.incoming(node) {
+            let Some(edge) = view.index.graph.edge(*edge_id) else {
+                continue;
+            };
+            if view.index.graph.atom(edge.kind) != "contains" && !seen.contains_key(&edge.source) {
+                seen.insert(edge.source, level + 1);
+                queue.push_back((edge.source, level + 1));
+            }
+        }
+    }
+    for node in direct {
+        seen.remove(node);
+    }
+    seen
+}
+
+fn is_test_path(path: &str) -> bool {
+    let path = path.to_ascii_lowercase();
+    path.contains("/tests/")
+        || path.contains("/__tests__/")
+        || path.contains("/spec/")
+        || path.starts_with("tests/")
+        || path.ends_with("_test.rs")
+        || path.ends_with("_test.go")
+        || path.ends_with(".test.ts")
+        || path.ends_with(".test.tsx")
+        || path.ends_with(".spec.ts")
+        || path.ends_with(".spec.tsx")
+}
+
+fn append_node_section(
+    view: &ProjectView,
+    sections: &mut Vec<String>,
+    heading: &str,
+    nodes: &BTreeSet<NodeId>,
+    limit: usize,
+) {
+    if nodes.is_empty() {
+        return;
+    }
+    sections.push(String::new());
+    sections.push(format!("## {heading}"));
+    sections.extend(
+        nodes
+            .iter()
+            .take(limit)
+            .map(|node| format_node(view, *node, None)),
+    );
+}
+
+fn endpoint_candidates(
+    view: &ProjectView,
+    endpoint: &str,
+    symbol: &str,
+    nodes: &[NodeId],
+) -> String {
+    if nodes.is_empty() {
+        return format!("Path {endpoint} symbol \"{symbol}\" was not found.");
+    }
+    let mut lines = vec![format!(
+        "Path {endpoint} symbol \"{symbol}\" is ambiguous; pass {endpoint}File:"
+    )];
+    lines.extend(
+        nodes
+            .iter()
+            .take(20)
+            .map(|node| format_node(view, *node, None)),
+    );
+    lines.join("\n")
+}
+
+fn shortest_paths(
+    view: &ProjectView,
+    start: NodeId,
+    target: NodeId,
+    mode: PathMode,
+    max_hops: usize,
+    limit: usize,
+) -> Vec<Vec<EdgeId>> {
+    if start == target {
+        return vec![Vec::new()];
+    }
+    let mut queue = VecDeque::from([(start, Vec::<EdgeId>::new(), BTreeSet::from([start]))]);
+    let mut best_depth: BTreeMap<NodeId, usize> = BTreeMap::from([(start, 0)]);
+    let mut results = Vec::new();
+    let mut result_depth = None;
+    while let Some((node, path, visited)) = queue.pop_front() {
+        if path.len() >= max_hops || result_depth.is_some_and(|depth| path.len() >= depth) {
+            continue;
+        }
+        let mut edges = view
+            .index
+            .graph
+            .outgoing(node)
+            .iter()
+            .filter_map(|edge_id| {
+                let edge = view.index.graph.edge(*edge_id)?;
+                edge_allowed(view.index.graph.atom(edge.kind), mode)
+                    .then_some((*edge_id, edge.target))
+            })
+            .collect::<Vec<_>>();
+        edges.sort_by_key(|(edge_id, target)| {
+            (
+                node_path(view, *target).unwrap_or(""),
+                view.index.graph.label(*target),
+                view.index
+                    .graph
+                    .edge(*edge_id)
+                    .map(|edge| view.index.graph.atom(edge.kind))
+                    .unwrap_or(""),
+            )
+        });
+        for (edge_id, next) in edges {
+            if visited.contains(&next) {
+                continue;
+            }
+            let next_depth = path.len() + 1;
+            if best_depth
+                .get(&next)
+                .is_some_and(|depth| *depth < next_depth)
+            {
+                continue;
+            }
+            best_depth.insert(next, next_depth);
+            let mut next_path = path.clone();
+            next_path.push(edge_id);
+            if next == target {
+                result_depth.get_or_insert(next_depth);
+                results.push(next_path);
+                if results.len() == limit {
+                    return results;
+                }
+            } else {
+                let mut next_visited = visited.clone();
+                next_visited.insert(next);
+                queue.push_back((next, next_path, next_visited));
+            }
+        }
+    }
+    results
+}
+
+fn edge_allowed(kind: &str, mode: PathMode) -> bool {
+    if kind == "contains" {
+        return false;
+    }
+    match mode {
+        PathMode::Execution => is_execution_edge(kind),
+        PathMode::Dependency => !is_execution_edge(kind),
+        PathMode::Any => true,
+    }
 }
 
 fn symbol_nodes(view: &ProjectView, symbol: &str, file: Option<&str>) -> Vec<NodeId> {
@@ -862,7 +1478,49 @@ fn bounded(value: String, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use spectra_core::{LedgerEventKind, LedgerSource};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_root(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("spectra-{label}-{}-{unique}", std::process::id()))
+    }
+
+    fn efficiency_fixture(root: &Path) {
+        fs::create_dir_all(root.join("tests")).unwrap();
+        fs::write(
+            root.join("app.py"),
+            "from helper import helper\ndef run():\n    helper()\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("helper.py"),
+            "def helper():\n    leaf()\ndef leaf():\n    return 1\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("tests/test_app.py"),
+            "from app import run\ndef test_run():\n    run()\n",
+        )
+        .unwrap();
+    }
+
+    fn git(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(["-C"])
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     fn glob_matching_supports_codegraph_style_patterns() {
@@ -880,14 +1538,7 @@ mod tests {
 
     #[test]
     fn query_pack_serves_source_relationships_files_and_status() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "spectra-mcp-query-test-{}-{unique}",
-            std::process::id()
-        ));
+        let root = temp_root("mcp-query-test");
         fs::create_dir_all(&root).unwrap();
         fs::write(
             root.join("app.py"),
@@ -963,5 +1614,267 @@ mod tests {
         drop(view);
         drop(autosync);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn brief_is_bounded_and_never_borrows_another_session_state() {
+        let root = temp_root("brief-test");
+        efficiency_fixture(&root);
+        let first = LedgerSource {
+            harness: "custom".into(),
+            session_id: "one".into(),
+        };
+        let second = LedgerSource {
+            harness: "custom".into(),
+            session_id: "two".into(),
+        };
+        LedgerStore::transaction(&root, |ledger| {
+            ledger.append_for(
+                first.clone(),
+                LedgerEventKind::EditObserved {
+                    paths: vec!["app.py".into()],
+                },
+            )?;
+            ledger.append_for(
+                second,
+                LedgerEventKind::Blocked {
+                    reason: "waiting for fixture".into(),
+                },
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let autosync = AutoSync::default();
+        let view = open_project(&autosync, root.to_str()).unwrap();
+        let shared = brief(
+            &view,
+            BriefOptions {
+                query: "TOKEN=do-not-echo",
+                token_budget: 600,
+                include_source: false,
+                source: None,
+            },
+        );
+        assert!(shared.contains("edit app.py"));
+        assert!(shared.contains("waiting for fixture"));
+        assert!(shared.contains("goal=[REDACTED]"));
+        assert!(!shared.contains("Editing"));
+        assert!(!shared.contains("AwaitingAuthorization"));
+        assert!(shared.chars().count().div_ceil(4) <= 600);
+        let session = brief(
+            &view,
+            BriefOptions {
+                query: "resume run",
+                token_budget: 600,
+                include_source: true,
+                source: Some(first),
+            },
+        );
+        assert!(session.contains("Editing"));
+        assert!(session.contains("app.py"));
+        assert!(session.contains("2\tdef run"));
+        assert!(!session.contains("super-secret-value"));
+        assert!(session.chars().count().div_ceil(4) <= 600);
+        drop(view);
+        drop(autosync);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn changes_cover_git_worktree_explicit_paths_tests_and_ledger_fallback() {
+        let root = temp_root("changes-test");
+        efficiency_fixture(&root);
+        git(&root, &["init", "-q"]);
+        git(&root, &["add", "."]);
+        git(
+            &root,
+            &[
+                "-c",
+                "user.name=Spectra",
+                "-c",
+                "user.email=spectra@example.invalid",
+                "commit",
+                "-qm",
+                "fixture",
+            ],
+        );
+        fs::write(
+            root.join("app.py"),
+            "from helper import helper\ndef run():\n    helper()\n    return 2\n",
+        )
+        .unwrap();
+        git(&root, &["add", "app.py"]);
+        fs::write(
+            root.join("app.py"),
+            "from helper import helper\ndef run():\n    helper()\n    return 3\n",
+        )
+        .unwrap();
+        fs::remove_file(root.join("helper.py")).unwrap();
+        fs::write(root.join("new.rs"), "pub fn new_symbol() {}\n").unwrap();
+        fs::write(
+            root.join("application.properties"),
+            "database.password=rotated-secret-value\n",
+        )
+        .unwrap();
+        let autosync = AutoSync::default();
+        let view = open_project(&autosync, root.to_str()).unwrap();
+        let worktree = changes(
+            &view,
+            ChangeOptions {
+                base: "HEAD",
+                paths: None,
+                depth: 2,
+                include_tests: true,
+                token_budget: 800,
+            },
+        );
+        assert!(worktree.contains("provenance=git-worktree"));
+        assert!(worktree.contains("app.py"));
+        assert!(worktree.contains("helper.py deleted"));
+        assert!(worktree.contains("new.rs"));
+        assert!(worktree.contains("application.properties"));
+        assert!(!worktree.contains("return 3"));
+        assert!(!worktree.contains("rotated-secret-value"));
+        assert!(worktree.chars().count().div_ceil(4) <= 800);
+        let explicit_paths = vec!["app.py".into()];
+        let explicit = changes(
+            &view,
+            ChangeOptions {
+                base: "HEAD",
+                paths: Some(&explicit_paths),
+                depth: 2,
+                include_tests: true,
+                token_budget: 800,
+            },
+        );
+        assert!(explicit.contains("provenance=explicit-paths"));
+        assert!(explicit.contains("run (function)"));
+        assert!(explicit.contains("test_run"));
+        assert!(explicit.contains("1. distance="));
+        drop(view);
+        drop(autosync);
+        fs::remove_dir_all(root).unwrap();
+
+        let fallback_root = temp_root("changes-ledger-test");
+        efficiency_fixture(&fallback_root);
+        LedgerStore::transaction(&fallback_root, |ledger| {
+            ledger.append(LedgerEventKind::EditObserved {
+                paths: vec!["app.py".into()],
+            })?;
+            Ok(())
+        })
+        .unwrap();
+        let autosync = AutoSync::default();
+        let view = open_project(&autosync, fallback_root.to_str()).unwrap();
+        let fallback = changes(
+            &view,
+            ChangeOptions {
+                base: "HEAD",
+                paths: None,
+                depth: 2,
+                include_tests: true,
+                token_budget: 800,
+            },
+        );
+        assert!(fallback.contains("provenance=ledger-fallback"));
+        assert!(fallback.contains("app.py"));
+        drop(view);
+        drop(autosync);
+        fs::remove_dir_all(fallback_root).unwrap();
+    }
+
+    #[test]
+    fn typed_paths_are_directed_deterministic_and_report_ambiguity() {
+        let root = temp_root("path-test");
+        efficiency_fixture(&root);
+        fs::write(
+            root.join("duplicate_a.py"),
+            "def duplicate():\n    return 1\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("duplicate_b.py"),
+            "def duplicate():\n    return 2\n",
+        )
+        .unwrap();
+        let autosync = AutoSync::default();
+        let view = open_project(&autosync, root.to_str()).unwrap();
+        let forward = typed_paths(
+            &view,
+            PathOptions {
+                from: "run",
+                to: "leaf",
+                from_file: None,
+                to_file: None,
+                mode: PathMode::Execution,
+                max_hops: 8,
+            },
+        );
+        assert!(forward.contains("Path 1 (2 hops)"));
+        assert!(forward.contains("-calls→"));
+        assert_eq!(
+            forward,
+            typed_paths(
+                &view,
+                PathOptions {
+                    from: "run",
+                    to: "leaf",
+                    from_file: None,
+                    to_file: None,
+                    mode: PathMode::Execution,
+                    max_hops: 8,
+                },
+            )
+        );
+        let reverse = typed_paths(
+            &view,
+            PathOptions {
+                from: "leaf",
+                to: "run",
+                from_file: None,
+                to_file: None,
+                mode: PathMode::Execution,
+                max_hops: 8,
+            },
+        );
+        assert!(reverse.contains("a reverse path exists"));
+        let ambiguous = typed_paths(
+            &view,
+            PathOptions {
+                from: "duplicate",
+                to: "run",
+                from_file: None,
+                to_file: None,
+                mode: PathMode::Any,
+                max_hops: 8,
+            },
+        );
+        assert!(ambiguous.contains("ambiguous"));
+        assert!(ambiguous.contains("duplicate_a.py"));
+        drop(view);
+        drop(autosync);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn frozen_efficiency_scenarios_reduce_median_tool_calls_by_forty_percent() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../benchmarks/fixtures/efficiency-tool-scenarios.json"
+        ))
+        .unwrap();
+        assert_eq!(fixture["version"], 1);
+        let mut reductions = fixture["scenarios"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|scenario| {
+                assert!(!scenario["required_facts"].as_array().unwrap().is_empty());
+                let baseline = scenario["baseline_calls"].as_f64().unwrap();
+                let composite = scenario["composite_calls"].as_f64().unwrap();
+                1.0 - composite / baseline
+            })
+            .collect::<Vec<_>>();
+        reductions.sort_by(f64::total_cmp);
+        assert!(reductions[reductions.len() / 2] >= 0.40);
     }
 }

@@ -1,0 +1,7 @@
+{"session_id":"gemini-session","hook_event_name":"SessionStart","source":"startup","cwd":"$PROJECT"}
+{"session_id":"gemini-session","hook_event_name":"AfterTool","cwd":"$PROJECT","tool_name":"write_file","tool_input":{"file_path":"src/lib.rs","content":"private body"},"tool_response":{"error":false}}
+{"session_id":"gemini-session","hook_event_name":"AfterTool","cwd":"$PROJECT","tool_name":"run_shell_command","tool_input":{"command":"cargo test --workspace"},"tool_response":{"exit_code":101,"llmContent":"test failed"}}
+{"session_id":"gemini-session","hook_event_name":"AfterTool","cwd":"$PROJECT","tool_name":"replace","tool_input":{"file_path":"src/lib.rs","old_string":"private","new_string":"fixed"},"tool_response":{"error":false}}
+{"session_id":"gemini-session","hook_event_name":"AfterTool","cwd":"$PROJECT","tool_name":"run_shell_command","tool_input":{"command":"cargo test --workspace"},"tool_response":{"exit_code":0,"llmContent":"all tests passed"}}
+{"session_id":"gemini-session","hook_event_name":"AfterAgent","cwd":"$PROJECT","prompt_response":"done"}
+{"session_id":"gemini-session","hook_event_name":"BeforeAgent","cwd":"$PROJECT","prompt":"what remains?"}

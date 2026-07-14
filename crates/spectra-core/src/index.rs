@@ -102,6 +102,51 @@ struct CachedEdge {
 }
 
 impl CodeIndex {
+    /// Loads an existing index without scanning or mutating the project.
+    pub fn load(project: &Path) -> Result<Option<Self>> {
+        let cache_path = project.join(INDEX_PATH);
+        if !cache_path.exists() {
+            return Ok(None);
+        }
+        let cache = load_cache(&cache_path)?;
+        if cache.version != INDEX_VERSION {
+            return Ok(None);
+        }
+        assemble(&cache).map(Some)
+    }
+
+    pub fn node_kind_counts(&self) -> BTreeMap<String, usize> {
+        let mut counts = BTreeMap::new();
+        for node in &self.graph.nodes {
+            *counts
+                .entry(self.graph.kind(node.id).to_owned())
+                .or_insert(0) += 1;
+        }
+        counts
+    }
+
+    pub fn language_counts(project: &Path) -> Result<BTreeMap<String, usize>> {
+        let cache_path = project.join(INDEX_PATH);
+        if !cache_path.exists() {
+            return Ok(BTreeMap::new());
+        }
+        let cache = load_cache(&cache_path)?;
+        let mut counts = BTreeMap::new();
+        for file in cache.files.values() {
+            *counts.entry(file.language.clone()).or_insert(0) += 1;
+        }
+        Ok(counts)
+    }
+
+    pub fn persisted_size(project: &Path) -> Result<u64> {
+        let path = project.join(INDEX_PATH);
+        Ok(if path.exists() {
+            fs::metadata(path)?.len()
+        } else {
+            0
+        })
+    }
+
     pub fn refresh(project: &Path) -> Result<(Self, IndexReport)> {
         let (index, report, _lock) = Self::refresh_holding_lock(project)?;
         Ok((index, report))

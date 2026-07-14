@@ -1,19 +1,28 @@
 use std::{
     fs,
     io::Write,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
-    thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use spectra_core::{LedgerState, LedgerStore};
 
 #[cfg(unix)]
 use std::os::unix::fs::{PermissionsExt, symlink};
+#[cfg(unix)]
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
 
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn recorded_fixture_payload(line: &str, project: &Path) -> String {
+    let project = serde_json::to_string(&project.to_string_lossy()).unwrap();
+    line.replace("\"$PROJECT\"", &project)
+}
 
 fn fixture() -> PathBuf {
     let timestamp = SystemTime::now()
@@ -325,9 +334,9 @@ esac
 
     let status = run(&["status", "--agent", "codex"]);
     assert!(status.status.success());
-    assert_eq!(
-        String::from_utf8_lossy(&status.stdout).trim(),
-        "Codex: MCP=current, Ledger hooks=current"
+    assert!(
+        String::from_utf8_lossy(&status.stdout)
+            .contains("Codex: MCP=current, Ledger hooks=current, Capability=topology+ledger")
     );
 
     let removed = run(&["uninstall", "--agent", "codex"]);
@@ -337,9 +346,9 @@ esac
         String::from_utf8_lossy(&removed.stderr)
     );
     assert!(String::from_utf8_lossy(&removed.stdout).contains("Removed"));
-    assert_eq!(
-        String::from_utf8_lossy(&run(&["status", "--agent", "codex"]).stdout).trim(),
-        "Codex: MCP=missing, Ledger hooks=missing"
+    assert!(
+        String::from_utf8_lossy(&run(&["status", "--agent", "codex"]).stdout)
+            .contains("Codex: MCP=missing, Ledger hooks=missing, Capability=topology+ledger")
     );
     let hooks: serde_json::Value = serde_json::from_slice(&fs::read(&hooks_path).unwrap()).unwrap();
     assert_eq!(hooks["hooks"]["Stop"].as_array().unwrap().len(), 1);
@@ -687,7 +696,7 @@ fn auto_configures_every_detected_agent_without_host_leakage() {
     fs::write(&cursor, "{}\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_spectra"))
-        .arg("install")
+        .args(["install", "--yes"])
         .env("PATH", &root)
         .env("SPECTRA_HOME", &root)
         .env("SPECTRA_CLAUDE_CONFIG", &claude)
@@ -726,7 +735,7 @@ fn auto_reports_a_conflict_without_skipping_other_detected_agents() {
     fs::write(&cursor, "{}\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_spectra"))
-        .arg("install")
+        .args(["install", "--yes"])
         .env("PATH", &root)
         .env("SPECTRA_HOME", &root)
         .env("SPECTRA_CLAUDE_CONFIG", &claude)
@@ -806,4 +815,280 @@ fn malformed_hook_payloads_fail_open_without_output() {
     assert!(output.status.success());
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn canonical_lifecycle_protocol_is_versioned_idempotent_and_session_scoped() {
+    let root = fixture();
+    fs::create_dir_all(root.join(".git")).unwrap();
+    let send = |event: serde_json::Value| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_spectra"))
+            .args(["lifecycle", "ingest"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(&serde_json::to_vec(&event).unwrap())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    };
+    let edit = serde_json::json!({
+        "version":1,
+        "source":{"harness":"custom","session_id":"one","event_id":"edit-1"},
+        "cwd":root,
+        "event":{"type":"edit_observed","paths":["src/lib.rs"]}
+    });
+    let first = send(edit.clone());
+    assert!(first.status.success());
+    let first: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(first["state"], "editing");
+    assert_eq!(first["duplicate"], false);
+    let duplicate = send(edit);
+    let duplicate: serde_json::Value = serde_json::from_slice(&duplicate.stdout).unwrap();
+    assert_eq!(duplicate["duplicate"], true);
+
+    let context = send(serde_json::json!({
+        "version":1,
+        "source":{"harness":"custom","session_id":"two","event_id":"context-1"},
+        "cwd":root,
+        "event":{"type":"context_requested"}
+    }));
+    let context: serde_json::Value = serde_json::from_slice(&context.stdout).unwrap();
+    assert_eq!(context["state"], "idle");
+    assert!(
+        context["context"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("edit src/lib.rs")
+    );
+    assert!(context["context"]["estimated_tokens"].as_u64().unwrap() < 150);
+
+    let invalid = send(serde_json::json!({
+        "version":2,
+        "source":{"harness":"custom","session_id":"one","event_id":"bad"},
+        "cwd":root,
+        "event":{"type":"context_requested"}
+    }));
+    assert!(!invalid.status.success());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn recorded_claude_gemini_and_cursor_sessions_retain_bounded_facts() {
+    let fixtures = [
+        (
+            "claude",
+            include_str!("../../../benchmarks/fixtures/claude-hook-session.jsonl"),
+        ),
+        (
+            "gemini",
+            include_str!("../../../benchmarks/fixtures/gemini-hook-session.jsonl"),
+        ),
+        (
+            "cursor",
+            include_str!("../../../benchmarks/fixtures/cursor-hook-session.jsonl"),
+        ),
+    ];
+    for (agent, fixture_text) in fixtures {
+        let root = fixture();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let mut final_output = Vec::new();
+        for line in fixture_text.lines() {
+            let payload = recorded_fixture_payload(line, &root);
+            let mut child = Command::new(env!("CARGO_BIN_EXE_spectra"))
+                .args(["hook", "--agent", agent])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(payload.as_bytes())
+                .unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "{agent}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if !output.stdout.is_empty() {
+                final_output = output.stdout;
+            }
+        }
+        let ledger = LedgerStore::open(&root).unwrap();
+        let projection = ledger.projection();
+        assert!(
+            projection.text.contains("edit src/lib.rs"),
+            "{agent}: {}",
+            projection.text
+        );
+        assert!(
+            projection.text.contains("success=true"),
+            "{agent}: {}",
+            projection.text
+        );
+        assert!(projection.estimated_tokens < 150);
+        let output: serde_json::Value = serde_json::from_slice(&final_output).unwrap();
+        let context = if agent == "cursor" {
+            output["additional_context"].as_str()
+        } else {
+            output["hookSpecificOutput"]["additionalContext"].as_str()
+        }
+        .unwrap();
+        assert!(context.contains("src/lib.rs"));
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn recorded_hook_fixture_paths_are_valid_json_on_windows() {
+    let payload = recorded_fixture_payload(
+        r#"{"cwd":"$PROJECT","workspace_roots":["$PROJECT"]}"#,
+        Path::new(r"D:\a\Spectra\Spectra"),
+    );
+    let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+    assert_eq!(payload["cwd"], r"D:\a\Spectra\Spectra");
+    assert_eq!(payload["workspace_roots"][0], payload["cwd"]);
+}
+
+#[test]
+fn non_interactive_install_requires_an_explicit_choice() {
+    let output = Command::new(env!("CARGO_BIN_EXE_spectra"))
+        .arg("install")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("requires --yes or an explicit --agent")
+    );
+}
+
+#[test]
+fn local_install_uses_verified_project_layers_and_labels_cursor_partial() {
+    let root = fixture();
+    let binary = env!("CARGO_BIN_EXE_spectra");
+    for agent in ["codex", "claude", "gemini", "cursor"] {
+        let output = Command::new(binary)
+            .args([
+                "install",
+                "--agent",
+                agent,
+                "--location",
+                "local",
+                "--path",
+                root.to_str().unwrap(),
+                "--no-color",
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{agent}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let expected = if agent == "cursor" {
+            "Capability=topology+ledger-partial"
+        } else {
+            "Capability=topology+ledger"
+        };
+        assert!(stdout.contains(expected), "{agent}: {stdout}");
+        assert!(!stdout.contains("\u{1b}["));
+    }
+    for path in [
+        ".codex/config.toml",
+        ".codex/hooks.json",
+        ".mcp.json",
+        ".claude/settings.json",
+        ".gemini/settings.json",
+        ".cursor/mcp.json",
+        ".cursor/hooks.json",
+    ] {
+        assert!(root.join(path).is_file(), "missing {path}");
+    }
+    for agent in ["codex", "claude", "gemini", "cursor"] {
+        let output = Command::new(binary)
+            .args([
+                "uninstall",
+                "--agent",
+                agent,
+                "--location",
+                "local",
+                "--path",
+                root.to_str().unwrap(),
+                "--dry-run",
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{agent} dry-run failed");
+        let output = Command::new(binary)
+            .args([
+                "uninstall",
+                "--agent",
+                agent,
+                "--location",
+                "local",
+                "--path",
+                root.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{agent}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(
+        !fs::read_to_string(root.join(".codex/config.toml"))
+            .unwrap()
+            .contains("[mcp_servers.spectra]")
+    );
+    for path in [".mcp.json", ".gemini/settings.json", ".cursor/mcp.json"] {
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join(path)).unwrap()).unwrap();
+        assert!(value["mcpServers"].get("spectra").is_none(), "{path}");
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn init_json_is_stable_and_home_guard_requires_force() {
+    let root = fixture();
+    let binary = env!("CARGO_BIN_EXE_spectra");
+    let guarded = Command::new(binary)
+        .args(["init", root.to_str().unwrap(), "--json"])
+        .env("HOME", &root)
+        .output()
+        .unwrap();
+    assert!(!guarded.status.success());
+    assert!(String::from_utf8_lossy(&guarded.stderr).contains("pass --force"));
+
+    let output = Command::new(binary)
+        .args(["init", root.to_str().unwrap(), "--json", "--force"])
+        .env("HOME", &root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["version"], 1);
+    assert_eq!(report["index_version"], 4);
+    assert!(report["files"].as_u64().unwrap() > 0);
+    assert!(report["nodes_by_kind"].is_object());
+    assert!(report["files_by_language"].is_object());
+    assert_eq!(report["lazy_sync"], true);
+    assert_eq!(report["synchronization_state"], "current");
+    fs::remove_dir_all(root).unwrap();
 }

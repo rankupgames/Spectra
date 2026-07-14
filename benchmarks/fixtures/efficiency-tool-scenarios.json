@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "resume-after-failure",
+      "tool": "spectra_brief",
+      "baseline_calls": 4,
+      "composite_calls": 1,
+      "required_facts": ["edit", "failed_verification", "sync", "anchors"]
+    },
+    {
+      "id": "change-impact-discovery",
+      "tool": "spectra_changes",
+      "baseline_calls": 5,
+      "composite_calls": 1,
+      "required_facts": ["changed_paths", "changed_symbols", "incoming_impact", "ranked_tests"]
+    },
+    {
+      "id": "a-to-b-flow-tracing",
+      "tool": "spectra_path",
+      "baseline_calls": 3,
+      "composite_calls": 1,
+      "required_facts": ["directed_path", "edge_types", "exact_anchors"]
+    }
+  ]
+}

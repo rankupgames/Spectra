@@ -1,6 +1,6 @@
 # Code adapters
 
-Spectra v0.2 moves parsing behind a language-adapter registry. The registry is the single source of truth for file discovery, grammar dispatch, and cache identity; an unchanged fragment is reused only when both its content hash and detected adapter match.
+Spectra's parsing lives behind a language-adapter registry. The registry is the single source of truth for file discovery, grammar dispatch, and cache identity; an unchanged fragment is reused only when both its content hash and detected adapter match.
 
 ## Functional contract
 
@@ -15,6 +15,8 @@ Recognizing an extension is not language support. An adapter is complete only wh
 7. Grammar fixtures plus measured cross-file coverage on representative repositories.
 
 Core extraction, ecosystem routing, and language bridges may land separately, but the parity table calls a language complete only after the applicable layers pass.
+
+C, C++, Dart, Lua, and Luau already have registered parser-backed core and semantic adapters. Their `Planned` cells below refer only to additional ecosystem-specific routing or cross-language bridges; v0.3 does not reimplement their extraction.
 
 ## Current adapter pack
 

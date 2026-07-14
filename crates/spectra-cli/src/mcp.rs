@@ -14,10 +14,13 @@ use rmcp::{
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
-use spectra_core::{MapArtifact, map_project};
+use spectra_core::{LedgerSource, MapArtifact, map_project};
 
 use crate::autosync::{AutoSync, SyncSnapshot};
-use crate::mcp_query::{self, Direction, FileFormat, NodeViewOptions};
+use crate::mcp_query::{
+    self, BriefOptions, ChangeOptions, Direction, FileFormat, NodeViewOptions, PathMode,
+    PathOptions,
+};
 
 #[derive(Clone, Default)]
 struct SpectraServer {
@@ -45,6 +48,107 @@ struct ExploreRequest {
     #[serde(rename = "maxFiles", alias = "max_files")]
     #[schemars(range(min = 1, max = 20))]
     max_files: Option<u8>,
+    /// Optional output budget in estimated text tokens. Existing default is preserved when omitted.
+    #[serde(rename = "tokenBudget", alias = "token_budget")]
+    #[schemars(range(min = 128, max = 6000))]
+    token_budget: Option<u16>,
+    /// Absolute project path, or any directory inside the project.
+    #[serde(rename = "projectPath", alias = "project_path")]
+    project_path: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum BriefDetailRequest {
+    #[default]
+    Compact,
+    Source,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+struct BriefSourceRequest {
+    /// Harness identifier used by lifecycle ingestion.
+    harness: String,
+    /// Exact harness session lane. Omit source entirely for project-wide facts only.
+    #[serde(rename = "sessionId", alias = "session_id")]
+    session_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+struct BriefRequest {
+    /// Current goal, architecture question, or work-resumption intent.
+    query: String,
+    /// Absolute project path, or any directory inside the project.
+    #[serde(rename = "projectPath", alias = "project_path")]
+    project_path: Option<String>,
+    /// Total output budget in estimated text tokens. Defaults to 600.
+    #[serde(rename = "tokenBudget", alias = "token_budget")]
+    #[schemars(range(min = 128, max = 2000))]
+    token_budget: Option<u16>,
+    /// Compact anchors or bounded line-numbered source. Defaults to compact.
+    detail: Option<BriefDetailRequest>,
+    /// Optional exact lifecycle session. Without it, no session state is emitted.
+    source: Option<BriefSourceRequest>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, JsonSchema)]
+struct ChangesRequest {
+    /// Absolute project path, or any directory inside the project.
+    #[serde(rename = "projectPath", alias = "project_path")]
+    project_path: Option<String>,
+    /// Git revision used as the worktree baseline. Defaults to HEAD.
+    base: Option<String>,
+    /// Explicit project-relative changed paths. When supplied, Git discovery is bypassed.
+    paths: Option<Vec<String>>,
+    /// Incoming dependency traversal depth. Defaults to 2 and is capped at 10.
+    #[schemars(range(min = 1, max = 10))]
+    depth: Option<u8>,
+    /// Include ranked affected tests. Defaults to true.
+    #[serde(rename = "includeTests", alias = "include_tests")]
+    include_tests: Option<bool>,
+    /// Total output budget in estimated text tokens. Defaults to 800.
+    #[serde(rename = "tokenBudget", alias = "token_budget")]
+    #[schemars(range(min = 128, max = 2000))]
+    token_budget: Option<u16>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum PathModeRequest {
+    #[default]
+    Execution,
+    Dependency,
+    Any,
+}
+
+impl From<PathModeRequest> for PathMode {
+    fn from(value: PathModeRequest) -> Self {
+        match value {
+            PathModeRequest::Execution => Self::Execution,
+            PathModeRequest::Dependency => Self::Dependency,
+            PathModeRequest::Any => Self::Any,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+struct PathRequest {
+    /// Directed path origin symbol.
+    from: String,
+    /// Directed path destination symbol.
+    to: String,
+    /// Optional origin path suffix used for disambiguation.
+    #[serde(rename = "fromFile", alias = "from_file")]
+    from_file: Option<String>,
+    /// Optional destination path suffix used for disambiguation.
+    #[serde(rename = "toFile", alias = "to_file")]
+    to_file: Option<String>,
+    /// Edge family: execution, dependency, or any non-containment edge.
+    mode: Option<PathModeRequest>,
+    /// Maximum directed hops. Defaults to 8 and is capped at 20.
+    #[serde(rename = "maxHops", alias = "max_hops")]
+    #[schemars(range(min = 1, max = 20))]
+    max_hops: Option<u8>,
     /// Absolute project path, or any directory inside the project.
     #[serde(rename = "projectPath", alias = "project_path")]
     project_path: Option<String>,
@@ -202,6 +306,53 @@ impl SpectraServer {
     }
 
     #[tool(
+        name = "spectra_brief",
+        description = "PRIMARY WORK TOOL — combine bounded Ledger continuity, sync health, ranked topology anchors, and optional source for starting or resuming a coding task in one call.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn spectra_brief(&self, Parameters(request): Parameters<BriefRequest>) -> CallToolResult {
+        if let Some(error) = validate_required(&request.query, "query") {
+            return error;
+        }
+        let source = match request.source {
+            Some(source) => {
+                if let Some(error) = validate_required(&source.harness, "source.harness") {
+                    return error;
+                }
+                if let Some(error) = validate_required(&source.session_id, "source.sessionId") {
+                    return error;
+                }
+                Some(LedgerSource {
+                    harness: source.harness,
+                    session_id: source.session_id,
+                })
+            }
+            None => None,
+        };
+        query_result(
+            &self.autosync,
+            request.project_path.as_deref(),
+            "spectra_brief",
+            |view| {
+                mcp_query::brief(
+                    view,
+                    BriefOptions {
+                        query: &request.query,
+                        token_budget: usize::from(request.token_budget.unwrap_or(600)),
+                        include_source: matches!(request.detail, Some(BriefDetailRequest::Source)),
+                        source,
+                    },
+                )
+            },
+        )
+    }
+
+    #[tool(
         name = "spectra_explore",
         description = "PRIMARY TEXT TOOL — return bounded, line-numbered source for the files and symbols relevant to a code question, plus relationships among them in one call.",
         annotations(
@@ -223,10 +374,112 @@ impl SpectraServer {
             request.project_path.as_deref(),
             "spectra_explore",
             |view| {
-                mcp_query::explore(
+                let max_files = usize::from(request.max_files.unwrap_or(8));
+                request.token_budget.map_or_else(
+                    || mcp_query::explore(view, &request.query, max_files),
+                    |budget| {
+                        mcp_query::explore_budgeted(
+                            view,
+                            &request.query,
+                            max_files,
+                            usize::from(budget) * 4,
+                        )
+                    },
+                )
+            },
+        )
+    }
+
+    #[tool(
+        name = "spectra_changes",
+        description = "Map current worktree or explicit changed paths to exact symbols, incoming impact, and ranked tests without returning diff bodies.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn spectra_changes(
+        &self,
+        Parameters(request): Parameters<ChangesRequest>,
+    ) -> CallToolResult {
+        if request.paths.as_ref().is_some_and(|paths| paths.len() > 64) {
+            return CallToolResult::error(vec![ContentBlock::text(
+                "paths contains more than 64 entries",
+            )]);
+        }
+        if let Some(paths) = &request.paths {
+            for path in paths {
+                if let Some(error) = validate_optional_path(Some(path), "paths[]") {
+                    return error;
+                }
+            }
+        }
+        let base = request.base.as_deref().unwrap_or("HEAD");
+        if base.is_empty() || base.len() > 256 || base.starts_with('-') {
+            return CallToolResult::error(vec![ContentBlock::text(
+                "base must contain 1..=256 characters and must not start with '-'",
+            )]);
+        }
+        query_result(
+            &self.autosync,
+            request.project_path.as_deref(),
+            "spectra_changes",
+            |view| {
+                mcp_query::changes(
                     view,
-                    &request.query,
-                    usize::from(request.max_files.unwrap_or(8)),
+                    ChangeOptions {
+                        base,
+                        paths: request.paths.as_deref(),
+                        depth: usize::from(request.depth.unwrap_or(2)),
+                        include_tests: request.include_tests.unwrap_or(true),
+                        token_budget: usize::from(request.token_budget.unwrap_or(800)),
+                    },
+                )
+            },
+        )
+    }
+
+    #[tool(
+        name = "spectra_path",
+        description = "Find deterministic shortest directed typed paths between two symbols, preserving uncertain hops and requiring disambiguation instead of guessing.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn spectra_path(&self, Parameters(request): Parameters<PathRequest>) -> CallToolResult {
+        for (value, field) in [(&request.from, "from"), (&request.to, "to")] {
+            if let Some(error) = validate_required(value, field) {
+                return error;
+            }
+        }
+        for (value, field) in [
+            (request.from_file.as_deref(), "fromFile"),
+            (request.to_file.as_deref(), "toFile"),
+        ] {
+            if let Some(error) = validate_optional_path(value, field) {
+                return error;
+            }
+        }
+        query_result(
+            &self.autosync,
+            request.project_path.as_deref(),
+            "spectra_path",
+            |view| {
+                mcp_query::typed_paths(
+                    view,
+                    PathOptions {
+                        from: &request.from,
+                        to: &request.to,
+                        from_file: request.from_file.as_deref(),
+                        to_file: request.to_file.as_deref(),
+                        mode: request.mode.unwrap_or_default().into(),
+                        max_hops: usize::from(request.max_hops.unwrap_or(8)),
+                    },
                 )
             },
         )
@@ -449,8 +702,8 @@ impl SpectraServer {
 
 #[tool_handler(
     name = "spectra",
-    version = "0.2.1",
-    instructions = "Use spectra_map for visual architecture questions. Enable spectra_explore for bounded source and flow context; targeted search, node, caller/callee, impact, file-tree, and status tools are available through SPECTRA_MCP_TOOLS."
+    version = "0.3.0",
+    instructions = "Use spectra_brief to start or resume work with bounded continuity and ranked anchors. Use spectra_map for visual architecture questions. Change impact, typed paths, bounded source exploration, targeted search, node, caller/callee, file-tree, and status tools are available through SPECTRA_MCP_TOOLS."
 )]
 impl ServerHandler for SpectraServer {
     async fn list_tools(
@@ -555,7 +808,9 @@ fn allowed_tools(raw: Option<&str>) -> BTreeSet<String> {
         .map(|tool| tool.name.into_owned())
         .collect::<BTreeSet<_>>();
     let Some(raw) = raw.filter(|raw| !raw.trim().is_empty()) else {
-        return ["spectra_map".to_owned()].into_iter().collect();
+        return ["spectra_brief".to_owned(), "spectra_map".to_owned()]
+            .into_iter()
+            .collect();
     };
     if raw.trim() == "all" {
         return all;
@@ -672,7 +927,10 @@ mod tests {
             names,
             [
                 "spectra_map",
+                "spectra_brief",
                 "spectra_explore",
+                "spectra_changes",
+                "spectra_path",
                 "spectra_search",
                 "spectra_callers",
                 "spectra_callees",
@@ -684,7 +942,10 @@ mod tests {
             .into_iter()
             .collect()
         );
-        assert_eq!(allowed_tools(None), ["spectra_map".to_owned()].into());
+        assert_eq!(
+            allowed_tools(None),
+            ["spectra_brief".to_owned(), "spectra_map".to_owned()].into()
+        );
         assert_eq!(
             allowed_tools(Some("explore,node,status")),
             ["spectra_explore", "spectra_node", "spectra_status"]
@@ -692,7 +953,7 @@ mod tests {
                 .map(str::to_owned)
                 .collect()
         );
-        assert_eq!(allowed_tools(Some("all")).len(), 9);
+        assert_eq!(allowed_tools(Some("all")).len(), 12);
         for tool in tools.iter().filter(|tool| tool.name != "spectra_map") {
             let annotations = tool.annotations.as_ref().expect("read tool annotations");
             assert_eq!(annotations.read_only_hint, Some(true));
@@ -701,7 +962,37 @@ mod tests {
             assert!(schema["properties"].get("projectPath").is_some());
         }
         let expected_properties = [
-            ("spectra_explore", &["query", "maxFiles", "projectPath"][..]),
+            (
+                "spectra_brief",
+                &["query", "projectPath", "tokenBudget", "detail", "source"][..],
+            ),
+            (
+                "spectra_explore",
+                &["query", "maxFiles", "tokenBudget", "projectPath"][..],
+            ),
+            (
+                "spectra_changes",
+                &[
+                    "projectPath",
+                    "base",
+                    "paths",
+                    "depth",
+                    "includeTests",
+                    "tokenBudget",
+                ][..],
+            ),
+            (
+                "spectra_path",
+                &[
+                    "from",
+                    "to",
+                    "fromFile",
+                    "toFile",
+                    "mode",
+                    "maxHops",
+                    "projectPath",
+                ][..],
+            ),
             (
                 "spectra_search",
                 &["query", "kind", "limit", "projectPath"][..],
@@ -759,5 +1050,44 @@ mod tests {
                 "{name} schema drifted"
             );
         }
+        let brief: BriefRequest = serde_json::from_value(serde_json::json!({
+            "query":"resume",
+            "project_path":"/tmp/project",
+            "token_budget":512,
+            "source":{"harness":"custom","session_id":"s1"}
+        }))
+        .unwrap();
+        assert_eq!(brief.project_path.as_deref(), Some("/tmp/project"));
+        assert_eq!(brief.token_budget, Some(512));
+        assert_eq!(brief.source.unwrap().session_id, "s1");
+        let changes: ChangesRequest = serde_json::from_value(serde_json::json!({
+            "project_path":"/tmp/project",
+            "include_tests":false,
+            "token_budget":700
+        }))
+        .unwrap();
+        assert_eq!(changes.project_path.as_deref(), Some("/tmp/project"));
+        assert_eq!(changes.include_tests, Some(false));
+        let path: PathRequest = serde_json::from_value(serde_json::json!({
+            "from":"a", "to":"b", "from_file":"a.rs", "to_file":"b.rs",
+            "max_hops":20, "project_path":"/tmp/project"
+        }))
+        .unwrap();
+        assert_eq!(path.from_file.as_deref(), Some("a.rs"));
+        assert_eq!(path.max_hops, Some(20));
+
+        let brief_tool = tools
+            .iter()
+            .find(|tool| tool.name == "spectra_brief")
+            .unwrap();
+        let brief_schema = serde_json::to_value(&brief_tool.input_schema).unwrap();
+        assert_eq!(brief_schema["properties"]["tokenBudget"]["minimum"], 128);
+        assert_eq!(brief_schema["properties"]["tokenBudget"]["maximum"], 2000);
+        let path_tool = tools
+            .iter()
+            .find(|tool| tool.name == "spectra_path")
+            .unwrap();
+        let path_schema = serde_json::to_value(&path_tool.input_schema).unwrap();
+        assert_eq!(path_schema["properties"]["maxHops"]["maximum"], 20);
     }
 }

@@ -3,7 +3,7 @@
 **A smaller, more useful memory for local AI coding agents.**
 
 [![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-CE412B?logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![Version: 0.2.1](https://img.shields.io/badge/Version-0.2.1-38BDF8.svg)](https://github.com/rankupgames/Spectra/releases/tag/v0.2.1)
+[![Version: 0.3.0](https://img.shields.io/badge/Version-0.3.0-38BDF8.svg)](https://github.com/rankupgames/Spectra/releases/tag/v0.3.0)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22C55E.svg)](LICENSE)
 [![Status: Prototype](https://img.shields.io/badge/Status-Prototype-F59E0B.svg)](#project-status)
 
@@ -19,7 +19,7 @@ Agent lifecycle ──adapter hooks──▶ immutable ledger ──▶ bounded 
 Instead of dumping source up front, Spectra lets the model see the shape of the system, choose an exact `path:start-end` anchor, and read code once it knows what it is looking for.
 
 > [!IMPORTANT]
-> Spectra is an early prototype. The v0.2 registry covers the complete CodeGraph v1.3.0 language and extension surface with 39 adapters, the matching framework/bridge packs are implemented, and the pinned representative-repository gates pass. Automatic topology setup supports eight local agents, while Lifecycle Ledger integration is currently limited to Codex. See [Project status](#project-status) before relying on it in production.
+> Spectra is an early prototype. The v0.3 registry retains the complete CodeGraph v1.3.0 language and extension surface with 39 adapters. The harness-neutral Ledger is verified for Codex, Claude Code, and Gemini CLI; Cursor support is intentionally partial because it can reinject continuity only at session start. See [Project status](#project-status) before relying on it in production.
 
 The [agent support contract](docs/agent-support.md) tracks topology and Ledger support separately so an MCP integration is never mistaken for lifecycle coverage.
 
@@ -49,7 +49,7 @@ These numbers come from nine frozen prompts across pinned ripgrep, Tokio, and ru
 
 ## Quickstart
 
-Spectra does not have prebuilt binaries yet, but Cargo can install the tagged v0.2.1 release directly from GitHub:
+Spectra does not have prebuilt binaries yet, but Cargo can install the tagged v0.3.0 release directly from GitHub:
 
 ### Requirements
 
@@ -62,7 +62,7 @@ Any MCP client can also run `spectra serve --mcp` manually.
 ### 1. Install Spectra
 
 ```sh
-cargo install --git https://github.com/rankupgames/Spectra.git --tag v0.2.1 --bin spectra --locked
+cargo install --git https://github.com/rankupgames/Spectra.git --tag v0.3.0 --bin spectra --locked
 ```
 
 ### 2. Connect your agents
@@ -71,7 +71,7 @@ cargo install --git https://github.com/rankupgames/Spectra.git --tag v0.2.1 --bi
 spectra install
 ```
 
-Spectra detects every supported agent installed on your machine and configures all of them in one pass. Restart any agents it reports. If Codex is among them, open `/hooks` and review the **Spectra context ledger** hook once; Codex keeps that trust decision in your hands.
+In a terminal, Spectra opens a short wizard that scans for supported agents, shows each capability tier, asks where to install, preflights conflicts, and confirms before writing. For unattended global installation of every detected target, use `spectra install --yes`. Restart any agents it reports. If Codex is among them, review the **Spectra context ledger** hook once; Codex keeps that trust decision in your hands.
 
 Confirm the installation:
 
@@ -82,11 +82,13 @@ spectra status
 Expected output:
 
 ```text
-Claude Code: MCP=current, Ledger=not available
-Codex: MCP=current, Ledger hooks=current
+Claude Code: MCP=current, Ledger hooks=current, Capability=topology+ledger
+Codex: MCP=current, Ledger hooks=current, Capability=topology+ledger
+Cursor: MCP=current, Ledger hooks=current, Capability=topology+ledger-partial
+Gemini CLI: MCP=current, Ledger hooks=current, Capability=topology+ledger
 ```
 
-Your output only lists the agents Spectra detected. Every supported agent gets visual topology; Codex also gets the lifecycle Ledger. Spectra will not claim Ledger support for another agent until that agent's lifecycle protocol is documented and replay-tested.
+Your output only lists the agents Spectra detected. Codex, Claude Code, and Gemini CLI have recorded-wire `topology+ledger` coverage. Cursor is visibly labeled `topology+ledger-partial`: it records lifecycle facts but can reinject context only at `sessionStart`, not before every prompt.
 
 After that, there is nothing to babysit. The long-lived MCP process watches every project it serves, reconciles changes after a short debounce, and performs a startup catch-up before accepting requests. Maps still check for changes synchronously, so a degraded or unavailable watcher cannot silently return a stale topology. Concurrent MCP servers, CLI commands, and fallback hooks coordinate through a heartbeat-backed project lock. You do not need to run a separate daemon, remember a `sync` command, or initialize each repository by hand.
 
@@ -139,46 +141,53 @@ Whenever an agent asks for a map, Spectra:
 5. Selects and renders a query-focused subgraph.
 6. Records the synchronization and map outcome in the Ledger.
 
-On Codex, the Ledger also notices supported approvals, `apply_patch` edits, verification commands, and turn completion. When a new session or prompt begins, the agent receives a short state projection instead of a replay of everything Spectra observed.
+Provider adapters for Codex, Claude Code, Gemini CLI, and Cursor normalize supported authorization, edit, verification, completion, and blocker events into the same private boundary. Codex, Claude, and Gemini receive a short session-aware projection at their documented context hooks. Cursor records the same bounded facts but reinjects only at session start.
 
 ## CLI reference
 
 ```text
-spectra install [--agent auto|all|claude|cursor|codex|open-code|hermes|gemini|antigravity|kiro] [--dry-run]
-spectra status [--agent auto|all|claude|cursor|codex|open-code|hermes|gemini|antigravity|kiro]
-spectra uninstall [--agent auto|all|claude|cursor|codex|open-code|hermes|gemini|antigravity|kiro] [--dry-run]
+spectra install [--agent AGENT] [--location global|local] [--path REPO] [--yes] [--topology-only] [--dry-run] [--no-color]
+spectra status [--agent AGENT] [--path REPO] [--json]
+spectra uninstall [--agent AGENT] [--location global|local] [--path REPO] [--dry-run]
 
-spectra init [PATH]
+spectra init [PATH] [--force] [--json] [--no-color]
 spectra sync [PATH] [--quiet]
 spectra autosync install [PATH]
 spectra autosync status [PATH]
 spectra autosync remove [PATH]
 spectra map <QUERY> [--path PATH] [--max-nodes 1..96] [--out DIR]
 spectra serve --mcp
+spectra lifecycle ingest
+spectra hook [--agent codex|claude|gemini|cursor]
 ```
 
-`spectra init` is an optional eager-indexing command for diagnostics and benchmarks. `spectra sync` exposes the same reconciliation path used by the watcher and is intentionally quiet-capable for automation. Neither command is required during ordinary MCP use.
+`spectra init` is an optional eager-indexing command for diagnostics and benchmarks. It reports index version, file/node/edge totals, database size, node kinds, languages, synchronization state, and elapsed time; `--json` emits the stable report. Home and filesystem roots require `--force`. `spectra sync` exposes the same reconciliation path used by the watcher and is intentionally quiet-capable for automation. Neither command is required during ordinary MCP use.
 
 On filesystems where native recursive watching is unavailable or unreliable, `spectra autosync install` adds marked blocks to the repository's `post-commit`, `post-merge`, and `post-checkout` hooks. Each hook launches `spectra sync --quiet` in the background. Installation is idempotent, honors Git's resolved hooks directory, preserves existing hook bodies, and `spectra autosync remove` deletes only Spectra-owned blocks.
 
-`--agent auto` is the default and configures every detected agent. `--agent all` attempts every adapter; agents that expose configuration only through their own CLI must already be installed.
+`--agent auto` is the default and configures every detected agent. `--agent all` attempts every adapter; agents that expose configuration only through their own CLI must already be installed. Non-interactive use requires an explicit `--agent` or `--yes`, so it never waits for wizard input. Verified local configuration is available for Codex, Claude Code, Gemini CLI, and Cursor.
 
 The installer is idempotent and ownership-aware: it updates stale Spectra registrations, preserves unrelated settings and comments, writes configuration atomically, and refuses to overwrite or remove a foreign MCP entry named `spectra`.
 
 ## MCP interface
 
-Spectra keeps the default MCP surface to one primary visual tool, matching CodeGraph's one-tool default:
+Spectra keeps the default MCP surface to two complementary tools:
 
 ```text
+spectra_brief(query, projectPath?, tokenBudget?, detail?, source?)
 spectra_map(query, projectPath?, maxNodes?)
 ```
 
-Its response contains an `image/png` content block followed by compact anchor metadata. It never includes source bodies. The legacy snake-case parameter spellings remain accepted.
+Use `spectra_brief` as the first call when starting or resuming work. It combines bounded project-wide Ledger facts, synchronization health, ranked graph anchors, affected boundaries, and suggested next reads. Session state is included only when an exact `{harness, sessionId}` source is supplied. Compact mode defaults to 600 estimated tokens; `detail=source` substitutes bounded, line-numbered source windows and never creates an image or map artifact.
 
-The full CodeGraph-parity query pack is available without rebuilding. Set `SPECTRA_MCP_TOOLS=all`, or provide a comma-separated short-name allowlist such as `map,explore,node,status`. The available tools are:
+Use `spectra_map` when a visual architecture view is useful. Its response contains an `image/png` content block followed by compact anchor metadata and never includes source bodies. Legacy snake-case parameter spellings remain accepted by every tool.
+
+Change impact, typed paths, and the full CodeGraph-parity query pack are available without rebuilding. Set `SPECTRA_MCP_TOOLS=all`, or provide a comma-separated short-name allowlist such as `brief,map,changes,path,explore`. The available opt-in tools are:
 
 ```text
-spectra_explore(query, maxFiles?, projectPath?)
+spectra_changes(projectPath?, base?, paths?, depth?, includeTests?, tokenBudget?)
+spectra_path(from, to, fromFile?, toFile?, mode?, maxHops?, projectPath?)
+spectra_explore(query, maxFiles?, projectPath?, tokenBudget?)
 spectra_search(query, kind?, limit?, projectPath?)
 spectra_callers(symbol, file?, limit?, projectPath?)
 spectra_callees(symbol, file?, limit?, projectPath?)
@@ -188,7 +197,7 @@ spectra_status(projectPath?)
 spectra_files(path?, pattern?, format?, includeMetadata?, maxDepth?, projectPath?)
 ```
 
-These tools provide bounded line-numbered source exploration, symbol and relationship queries, impact traversal, source/file views, project inventory, and index health. All support cross-project queries. Configuration values in YAML and properties files are withheld from source responses.
+Use `spectra_changes` for worktree-to-symbol impact and ranked test discovery; explicit paths work without Git. Use `spectra_path` for up to three deterministic directed execution or dependency paths with exact anchors. Use `spectra_explore` for a deeper bounded source-and-call-path read after brief identifies an anchor. The remaining tools provide focused symbol, relationship, file-tree, project inventory, and index-health queries. All support cross-project queries. Configuration values in YAML and properties files are withheld from source responses.
 
 The final metadata line reports watcher health as `autosync=active|degraded pending=N`. Watch registration honors repository ignore rules so generated build trees do not consume native watcher resources; macOS also uses an ignore-aware source polling fallback if FSEvents misses a change. Set `SPECTRA_WATCH_DEBOUNCE_MS` to a value from 100 through 60000 to override the default 2000 ms debounce window for unusually bursty repositories.
 
@@ -211,7 +220,7 @@ args = ["serve", "--mcp"]
 The workspace is intentionally split into two small layers:
 
 - **`spectra-core`:** packed graph primitives, language-adapter extraction and resolution, deterministic selection and rendering, incremental indexing, and the State Machine Ledger.
-- **`spectra`:** CLI commands, stdio MCP transport, watcher-backed automatic synchronization, multi-agent installation, Codex lifecycle-hook translation, and benchmark runners.
+- **`spectra`:** CLI commands, stdio MCP transport, watcher-backed automatic synchronization, multi-agent installation, harness-neutral lifecycle ingestion, private provider-hook translation, and benchmark runners.
 
 The internal graph kernel is domain-neutral:
 
@@ -240,7 +249,7 @@ Spectra should not become another transcript database. It deliberately keeps les
 - Malformed or unsupported hook events fail open and cannot block the agent loop.
 - The `.env` file and `.spectra/` runtime data are ignored by Git.
 
-Codex currently documents incomplete hook coverage for richer unified shell execution. Spectra records only supported lifecycle events and does not claim to intercept every OS process or terminal operation.
+Provider hooks remain fail-open and record only their documented lifecycle surfaces. Spectra does not claim to intercept every OS process or terminal operation. Cursor's session-start-only reinjection remains an explicit partial capability.
 
 ## Development and verification
 
@@ -264,20 +273,21 @@ Implemented:
 - bounded MCP image and anchor responses
 - the complete CodeGraph v1.3.0 MCP query capability set, with a one-tool default and allowlist-enabled explore/search/traversal/node/files/status tools
 - automatic MCP installation for Claude Code, Cursor, Codex, OpenCode, Hermes Agent, Gemini CLI, Antigravity, and Kiro
-- automatic Codex lifecycle-hook installation
-- append-only State Machine Ledger with replay, recovery, redaction, concurrency control, and bounded projection
+- automatic lifecycle-hook installation for Codex, Claude Code, Gemini CLI, and Cursor
+- append-only, per-session State Machine Ledger with replay, recovery, redaction, concurrency control, cross-harness project facts, and bounded projection
+- stable harness-neutral `spectra lifecycle ingest` JSON v1 protocol
 - deterministic, provider-backed, and recorded-hook regression suites
 - pinned real-repository parity gates covering framework routes and multimodal topology quality
 
 Not yet implemented:
 
-- non-Codex Ledger adapters without a verified lifecycle protocol and recorded-wire replay
+- per-prompt Cursor context reinjection (the host currently exposes reliable reinjection only at session start)
 - complete unified-shell interception
 - packaged release binaries and automatic updater
 - Tauri observability UI
 - public graph-extension SDK
 
-The v0.2 release delivers functional CodeGraph language parity: adapters, ecosystem routing, cross-language bridges, CodeGraph-parity MCP queries, seamless autosync, semantic map metadata, and measured real-repository coverage. Packaged installers that do not require a Rust toolchain follow that work.
+The v0.3 release hardens that CodeGraph-parity topology around a harness-neutral continuity protocol, verified provider adapters, project-local setup, and a richer terminal workflow. Packaged installers that do not require a Rust toolchain remain future work.
 
 ## Contributing
 

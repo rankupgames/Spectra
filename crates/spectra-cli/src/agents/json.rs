@@ -17,7 +17,7 @@ pub(super) enum Ownership {
 }
 
 pub(super) fn install(target: JsonTarget, dry_run: bool) -> Result<String, BoxError> {
-    let path = (target.path)()?;
+    let path = target.path.clone();
     let executable = spectra_executable()?;
     let mut root = read_object(&path)?;
     let servers = object_field(&mut root, target.root_key, &path)?;
@@ -64,7 +64,7 @@ pub(super) fn install(target: JsonTarget, dry_run: bool) -> Result<String, BoxEr
 }
 
 pub(super) fn uninstall(target: JsonTarget, dry_run: bool) -> Result<String, BoxError> {
-    let path = (target.path)()?;
+    let path = target.path.clone();
     let executable = spectra_executable()?;
     let mut root = read_object(&path)?;
     let Some(value) = root.get_mut(target.root_key) else {
@@ -102,7 +102,7 @@ pub(super) fn uninstall(target: JsonTarget, dry_run: bool) -> Result<String, Box
 }
 
 pub(super) fn status(target: JsonTarget) -> Result<String, BoxError> {
-    let path = (target.path)()?;
+    let path = target.path.clone();
     let executable = spectra_executable()?;
     let root = read_object(&path)?;
     let entry = match root.get(target.root_key) {
