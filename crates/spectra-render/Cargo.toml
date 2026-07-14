@@ -1,0 +1,21 @@
+[package]
+name = "spectra-context-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "PNG and SVG topology rendering for Spectra"
+readme = "../../README.md"
+keywords = ["ai-agents", "code-analysis", "graph", "rendering", "context"]
+categories = ["development-tools", "visualization"]
+publish = false
+
+[lib]
+name = "spectra_render"
+
+[dependencies]
+resvg.workspace = true
+spectra-core = { package = "spectra-context-core", version = "0.2.1", path = "../spectra-core" }
+tiny-skia.workspace = true

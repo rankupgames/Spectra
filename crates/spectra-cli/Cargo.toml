@@ -28,6 +28,7 @@ schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 spectra-core = { package = "spectra-context-core", version = "0.2.1", path = "../spectra-core" }
+spectra-render = { package = "spectra-context-render", version = "0.2.1", path = "../spectra-render" }
 tokio.workspace = true
 
 [[bin]]

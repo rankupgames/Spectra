@@ -13,7 +13,8 @@ use std::{
 
 use agents::Agent;
 use clap::{Parser, Subcommand};
-use spectra_core::{IndexReport, map_project, sync_project};
+use spectra_core::{IndexReport, sync_project};
+use spectra_render::{MapArtifact, map_project};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -217,7 +218,7 @@ fn print_agent_report(report: agents::Report) -> Result<(), Box<dyn std::error::
     }
 }
 
-fn print_anchors(artifact: &spectra_core::MapArtifact) {
+fn print_anchors(artifact: &MapArtifact) {
     println!("{}", artifact.compact_metadata());
 }
 

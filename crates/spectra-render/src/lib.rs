@@ -1,10 +1,96 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
+    fmt, fs, io,
     path::{Path, PathBuf},
 };
 
-use crate::{CodeIndex, Error, Result, Selection, graph::NodeId};
+use spectra_core::{
+    CodeIndex, LedgerEventKind, LedgerStore, Selection, SelectionOptions, graph::NodeId, ledger,
+    select_subgraph, sync_project,
+};
+
+#[derive(Debug)]
+pub enum Error {
+    Core(spectra_core::Error),
+    Io(io::Error),
+    Render(String),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Core(error) => error.fmt(formatter),
+            Self::Io(error) => write!(formatter, "I/O error: {error}"),
+            Self::Render(message) => write!(formatter, "render error: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+impl From<spectra_core::Error> for Error {
+    fn from(error: spectra_core::Error) -> Self {
+        Self::Core(error)
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+/// Refresh an index and render a query-focused topology in one operation.
+pub fn map_project(
+    project: &Path,
+    query: &str,
+    max_nodes: usize,
+    output_dir: &Path,
+) -> Result<MapArtifact> {
+    let (index, _) = sync_project(project)?;
+    let selection = select_subgraph(
+        &index,
+        query,
+        SelectionOptions {
+            max_nodes: max_nodes.clamp(1, 96),
+        },
+    );
+    let artifact = render_map(
+        &index,
+        &selection,
+        query,
+        output_dir,
+        RenderOptions::default(),
+    )?;
+    let map_id = artifact
+        .png_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("topology")
+        .to_owned();
+    LedgerStore::transaction(project, |ledger| {
+        ledger.append(LedgerEventKind::MapRendered {
+            map_id,
+            query: ledger::redact_text(query),
+            anchors: artifact
+                .anchors
+                .iter()
+                .map(|(visual_id, anchor)| ledger::LedgerAnchor {
+                    visual_id: visual_id.clone(),
+                    path: anchor.path.clone(),
+                    start_line: anchor.start_line,
+                    end_line: anchor.end_line,
+                })
+                .collect(),
+            nodes: artifact.node_count,
+            truncated: artifact.truncated,
+        })?;
+        Ok(())
+    })?;
+    Ok(artifact)
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct RenderOptions {
@@ -412,7 +498,7 @@ fn stable_hash(bytes: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SourceSpan, graph::PackedGraph};
+    use spectra_core::{SourceSpan, graph::PackedGraph};
 
     #[test]
     fn svg_is_deterministic_and_contains_no_source_body() {
