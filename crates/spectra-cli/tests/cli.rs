@@ -1,19 +1,28 @@
 use std::{
     fs,
     io::Write,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
-    thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use spectra_core::{LedgerState, LedgerStore};
 
 #[cfg(unix)]
 use std::os::unix::fs::{PermissionsExt, symlink};
+#[cfg(unix)]
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
 
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn recorded_fixture_payload(line: &str, project: &Path) -> String {
+    let project = serde_json::to_string(&project.to_string_lossy()).unwrap();
+    line.replace("\"$PROJECT\"", &project)
+}
 
 fn fixture() -> PathBuf {
     let timestamp = SystemTime::now()
@@ -887,10 +896,9 @@ fn recorded_claude_gemini_and_cursor_sessions_retain_bounded_facts() {
     for (agent, fixture_text) in fixtures {
         let root = fixture();
         fs::create_dir_all(root.join(".git")).unwrap();
-        let project = root.to_string_lossy();
         let mut final_output = Vec::new();
         for line in fixture_text.lines() {
-            let payload = line.replace("$PROJECT", &project);
+            let payload = recorded_fixture_payload(line, &root);
             let mut child = Command::new(env!("CARGO_BIN_EXE_spectra"))
                 .args(["hook", "--agent", agent])
                 .stdin(Stdio::piped())
@@ -936,6 +944,17 @@ fn recorded_claude_gemini_and_cursor_sessions_retain_bounded_facts() {
         assert!(context.contains("src/lib.rs"));
         fs::remove_dir_all(root).unwrap();
     }
+}
+
+#[test]
+fn recorded_hook_fixture_paths_are_valid_json_on_windows() {
+    let payload = recorded_fixture_payload(
+        r#"{"cwd":"$PROJECT","workspace_roots":["$PROJECT"]}"#,
+        Path::new(r"D:\a\Spectra\Spectra"),
+    );
+    let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+    assert_eq!(payload["cwd"], r"D:\a\Spectra\Spectra");
+    assert_eq!(payload["workspace_roots"][0], payload["cwd"]);
 }
 
 #[test]

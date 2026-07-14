@@ -384,9 +384,9 @@ fn print_detailed_index_report(
     println!("  Files:     {}", report.files);
     println!("  Nodes:     {}", report.nodes);
     println!("  Edges:     {}", report.edges);
-    println!("  DB Size:   {} bytes", bytes);
-    println!("  Version:   {}", INDEX_VERSION);
-    println!("  Elapsed:   {} ms", elapsed_ms);
+    println!("  DB Size:   {bytes} bytes");
+    println!("  Version:   {INDEX_VERSION}");
+    println!("  Elapsed:   {elapsed_ms} ms");
     println!("\n{bold}Nodes by Kind{reset}");
     for (kind, count) in kinds {
         println!("  {kind:<18} {count}");
