@@ -102,7 +102,7 @@ pub(crate) fn install(
     for agent in selected(selection)? {
         match install_one(agent, dry_run, topology_only, location, project) {
             Ok(message) => report.messages.push(format!(
-                "{message}\n{}: Capability={}",
+                "{message}\n{}: Capability={}, Tools=brief+map",
                 label(agent),
                 if topology_only {
                     "topology"
@@ -128,7 +128,9 @@ pub(crate) fn uninstall(
 }
 
 pub(crate) fn status(selection: Agent) -> Result<Report, BoxError> {
-    run_selected(selection, status_one)
+    run_selected(selection, |agent| {
+        status_one(agent).map(|message| format!("{message}, Tools=brief+map"))
+    })
 }
 
 pub(crate) fn status_detected() -> Report {
@@ -138,7 +140,7 @@ pub(crate) fn status_detected() -> Report {
     };
     for agent in TARGETS.into_iter().filter(|agent| detected(*agent)) {
         match status_one(agent) {
-            Ok(message) => report.messages.push(message),
+            Ok(message) => report.messages.push(format!("{message}, Tools=brief+map")),
             Err(error) => report.errors.push(format!("{}: {error}", label(agent))),
         }
     }

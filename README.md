@@ -171,18 +171,23 @@ The installer is idempotent and ownership-aware: it updates stale Spectra regist
 
 ## MCP interface
 
-Spectra keeps the default MCP surface to one primary visual tool, matching CodeGraph's one-tool default:
+Spectra keeps the default MCP surface to two complementary tools:
 
 ```text
+spectra_brief(query, projectPath?, tokenBudget?, detail?, source?)
 spectra_map(query, projectPath?, maxNodes?)
 ```
 
-Its response contains an `image/png` content block followed by compact anchor metadata. It never includes source bodies. The legacy snake-case parameter spellings remain accepted.
+Use `spectra_brief` as the first call when starting or resuming work. It combines bounded project-wide Ledger facts, synchronization health, ranked graph anchors, affected boundaries, and suggested next reads. Session state is included only when an exact `{harness, sessionId}` source is supplied. Compact mode defaults to 600 estimated tokens; `detail=source` substitutes bounded, line-numbered source windows and never creates an image or map artifact.
 
-The full CodeGraph-parity query pack is available without rebuilding. Set `SPECTRA_MCP_TOOLS=all`, or provide a comma-separated short-name allowlist such as `map,explore,node,status`. The available tools are:
+Use `spectra_map` when a visual architecture view is useful. Its response contains an `image/png` content block followed by compact anchor metadata and never includes source bodies. Legacy snake-case parameter spellings remain accepted by every tool.
+
+Change impact, typed paths, and the full CodeGraph-parity query pack are available without rebuilding. Set `SPECTRA_MCP_TOOLS=all`, or provide a comma-separated short-name allowlist such as `brief,map,changes,path,explore`. The available opt-in tools are:
 
 ```text
-spectra_explore(query, maxFiles?, projectPath?)
+spectra_changes(projectPath?, base?, paths?, depth?, includeTests?, tokenBudget?)
+spectra_path(from, to, fromFile?, toFile?, mode?, maxHops?, projectPath?)
+spectra_explore(query, maxFiles?, projectPath?, tokenBudget?)
 spectra_search(query, kind?, limit?, projectPath?)
 spectra_callers(symbol, file?, limit?, projectPath?)
 spectra_callees(symbol, file?, limit?, projectPath?)
@@ -192,7 +197,7 @@ spectra_status(projectPath?)
 spectra_files(path?, pattern?, format?, includeMetadata?, maxDepth?, projectPath?)
 ```
 
-These tools provide bounded line-numbered source exploration, symbol and relationship queries, impact traversal, source/file views, project inventory, and index health. All support cross-project queries. Configuration values in YAML and properties files are withheld from source responses.
+Use `spectra_changes` for worktree-to-symbol impact and ranked test discovery; explicit paths work without Git. Use `spectra_path` for up to three deterministic directed execution or dependency paths with exact anchors. Use `spectra_explore` for a deeper bounded source-and-call-path read after brief identifies an anchor. The remaining tools provide focused symbol, relationship, file-tree, project inventory, and index-health queries. All support cross-project queries. Configuration values in YAML and properties files are withheld from source responses.
 
 The final metadata line reports watcher health as `autosync=active|degraded pending=N`. Watch registration honors repository ignore rules so generated build trees do not consume native watcher resources; macOS also uses an ignore-aware source polling fallback if FSEvents misses a change. Set `SPECTRA_WATCH_DEBOUNCE_MS` to a value from 100 through 60000 to override the default 2000 ms debounce window for unusually bursty repositories.
 

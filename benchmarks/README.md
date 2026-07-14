@@ -93,6 +93,10 @@ Codex, Claude, and Gemini must retain equivalent session facts. Cursor is gated 
 
 The post-hook deterministic regression must preserve the 93.4% median reduction and 100% minimum fact-recall baselines recorded during prototype development.
 
+## Agent efficiency scenarios
+
+[`fixtures/efficiency-tool-scenarios.json`](fixtures/efficiency-tool-scenarios.json) freezes three common agent workflows: resuming after failed verification, discovering worktree impact and tests, and tracing an A-to-B flow. The release test compares the previous focused-query call count with the composite `brief`, `changes`, or `path` call and requires at least 40% fewer median calls. Separate query tests gate token budgets, changed-path and verification retention, deterministic paths, session isolation, and exclusion of raw diffs, source bodies, terminal output, and credentials.
+
 ## Grok multimodal evaluation
 
 `spectra-grok-eval` consumes an existing deterministic `results.json`, so model calls do not rebuild indexes or regenerate payloads. It uses xAI's Responses API with `grok-4.5`, low reasoning effort, low image detail, `store: false`, and identical system instructions for both arms. `XAI_KEY` is loaded from the process environment or an ignored `.env` file and is never written to an artifact.

@@ -125,6 +125,14 @@ pub struct LedgerProjection {
     pub estimated_tokens: usize,
 }
 
+/// Project-wide continuity facts without borrowing any harness session's state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LedgerFactsProjection {
+    pub sequence: u64,
+    pub text: String,
+    pub estimated_tokens: usize,
+}
+
 #[derive(Debug)]
 pub struct LedgerStore {
     path: PathBuf,
@@ -331,8 +339,31 @@ impl LedgerStore {
         self.projection_with_state(self.state_for(source))
     }
 
+    /// Projects shared repository facts while deliberately omitting session state.
+    pub fn project_facts(&self) -> LedgerFactsProjection {
+        let mut lines = vec![format!("P{}", self.events.len())];
+        self.append_project_facts(&mut lines);
+        let text = bound_projection(lines.join("\n"));
+        LedgerFactsProjection {
+            sequence: self.events.len() as u64,
+            estimated_tokens: text.chars().count().div_ceil(4),
+            text,
+        }
+    }
+
     fn projection_with_state(&self, state: LedgerState) -> LedgerProjection {
         let mut lines = vec![format!("S{} {:?}", self.events.len(), state)];
+        self.append_project_facts(&mut lines);
+        let text = bound_projection(lines.join("\n"));
+        LedgerProjection {
+            state,
+            sequence: self.events.len() as u64,
+            estimated_tokens: text.chars().count().div_ceil(4),
+            text,
+        }
+    }
+
+    fn append_project_facts(&self, lines: &mut Vec<String>) {
         for selector in [
             ProjectionSelector::Map,
             ProjectionSelector::Edit,
@@ -348,17 +379,14 @@ impl LedgerStore {
                 lines.extend(project_event(&event.kind));
             }
         }
-        let mut text = lines.join("\n");
-        if text.chars().count() > 580 {
-            text = text.chars().take(579).collect::<String>() + "…";
-        }
-        LedgerProjection {
-            state,
-            sequence: self.events.len() as u64,
-            estimated_tokens: text.chars().count().div_ceil(4),
-            text,
-        }
     }
+}
+
+fn bound_projection(mut text: String) -> String {
+    if text.chars().count() > 580 {
+        text = text.chars().take(579).collect::<String>() + "…";
+    }
+    text
 }
 
 struct LedgerLock {
@@ -945,6 +973,11 @@ mod tests {
                     .text
                     .contains("edit src/lib.rs")
             );
+            let shared = ledger.project_facts();
+            assert!(shared.text.contains("edit src/lib.rs"));
+            assert!(shared.text.contains("blocked waiting for input"));
+            assert!(!shared.text.contains("EDITING"));
+            assert!(!shared.text.contains("BLOCKED"));
             Ok(())
         })
         .unwrap();
