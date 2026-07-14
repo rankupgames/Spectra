@@ -449,7 +449,7 @@ impl SpectraServer {
 
 #[tool_handler(
     name = "spectra",
-    version = "0.2.1",
+    version = "0.3.0",
     instructions = "Use spectra_map for visual architecture questions. Enable spectra_explore for bounded source and flow context; targeted search, node, caller/callee, impact, file-tree, and status tools are available through SPECTRA_MCP_TOOLS."
 )]
 impl ServerHandler for SpectraServer {

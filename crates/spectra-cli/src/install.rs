@@ -75,6 +75,19 @@ impl fmt::Display for UninstallOutcome {
 }
 
 pub fn install_codex(dry_run: bool) -> Result<InstallOutcome, Box<dyn std::error::Error>> {
+    install_codex_with_hooks(dry_run, true)
+}
+
+pub fn install_codex_topology_only(
+    dry_run: bool,
+) -> Result<InstallOutcome, Box<dyn std::error::Error>> {
+    install_codex_with_hooks(dry_run, false)
+}
+
+fn install_codex_with_hooks(
+    dry_run: bool,
+    include_hooks: bool,
+) -> Result<InstallOutcome, Box<dyn std::error::Error>> {
     let spectra = std::env::current_exe()?.canonicalize()?;
     let existing = get_codex_config()?;
     let ownership = existing
@@ -84,7 +97,7 @@ pub fn install_codex(dry_run: bool) -> Result<InstallOutcome, Box<dyn std::error
     if ownership == Some(Ownership::Foreign) {
         return Err("Codex already has a non-Spectra-owned MCP entry named 'spectra'; refusing to overwrite it".into());
     }
-    let hooks_current = hooks_are_current(&spectra)?;
+    let hooks_current = !include_hooks || hooks_are_current(&spectra)?;
     let mcp_current = ownership == Some(Ownership::Current);
     let had_hook_file = hooks_file_exists()?;
     if mcp_current && hooks_current {
@@ -111,7 +124,16 @@ pub fn install_codex(dry_run: bool) -> Result<InstallOutcome, Box<dyn std::error
         Some(Ownership::Current) => {}
         Some(Ownership::Foreign) => unreachable!(),
     }
-    install_hooks(&spectra)?;
+    if include_hooks && let Err(error) = install_hooks(&spectra) {
+        let rollback = rollback_codex_config(ownership, existing.as_ref());
+        if let Err(rollback) = rollback {
+            return Err(format!(
+                "{error}; additionally failed to roll back Codex MCP configuration: {rollback}"
+            )
+            .into());
+        }
+        return Err(error);
+    }
     Ok(if existing.is_some() || had_hook_file {
         InstallOutcome::Updated
     } else {
@@ -144,7 +166,17 @@ pub fn uninstall_codex(dry_run: bool) -> Result<UninstallOutcome, Box<dyn std::e
             "codex mcp remove",
         )?;
     }
-    uninstall_hooks()?;
+    if let Err(error) = uninstall_hooks() {
+        if let Some(config) = &config
+            && let Err(rollback) = add_codex_value(config, "codex mcp add during rollback")
+        {
+            return Err(format!(
+                "{error}; additionally failed to restore Codex MCP configuration: {rollback}"
+            )
+            .into());
+        }
+        return Err(error);
+    }
     Ok(UninstallOutcome::Removed)
 }
 
@@ -165,7 +197,9 @@ pub fn codex_status() -> Result<String, Box<dyn std::error::Error>> {
     } else {
         "missing"
     };
-    Ok(format!("Codex: MCP={mcp}, Ledger hooks={hooks}"))
+    Ok(format!(
+        "Codex: MCP={mcp}, Ledger hooks={hooks}, Capability=topology+ledger"
+    ))
 }
 
 fn add_codex_config(spectra: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -186,6 +220,60 @@ fn add_codex_config(spectra: &Path) -> Result<(), Box<dyn std::error::Error>> {
             .output()?,
         "codex mcp add",
     )?;
+    Ok(())
+}
+
+fn rollback_codex_config(
+    prior_ownership: Option<Ownership>,
+    prior: Option<&Value>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match prior_ownership {
+        Some(Ownership::Current) => Ok(()),
+        None => {
+            checked(
+                codex_command()
+                    .args(["mcp", "remove", SERVER_NAME])
+                    .output()?,
+                "codex mcp remove during rollback",
+            )?;
+            Ok(())
+        }
+        Some(Ownership::Stale) => {
+            checked(
+                codex_command()
+                    .args(["mcp", "remove", SERVER_NAME])
+                    .output()?,
+                "codex mcp remove during rollback",
+            )?;
+            add_codex_value(
+                prior.ok_or("missing prior Codex configuration during rollback")?,
+                "codex mcp add during rollback",
+            )
+        }
+        Some(Ownership::Foreign) => unreachable!(),
+    }
+}
+
+fn add_codex_value(config: &Value, label: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = &config["transport"];
+    let command = transport["command"]
+        .as_str()
+        .ok_or("prior Codex stdio configuration has no command")?;
+    let args = transport["args"]
+        .as_array()
+        .ok_or("prior Codex stdio configuration has no args")?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or("prior Codex stdio configuration has a non-string arg")
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut add = codex_command();
+    add.args(["mcp", "add", SERVER_NAME, "--"])
+        .arg(command)
+        .args(args);
+    checked(add.output()?, label)?;
     Ok(())
 }
 
@@ -227,9 +315,15 @@ fn hook_command(spectra: &Path) -> Result<String, Box<dyn std::error::Error>> {
         .to_str()
         .ok_or("Spectra executable path is not valid UTF-8")?;
     #[cfg(windows)]
-    return Ok(format!("\"{}\" hook", path.replace('"', "\\\"")));
+    return Ok(format!(
+        "\"{}\" hook --agent codex",
+        path.replace('"', "\\\"")
+    ));
     #[cfg(not(windows))]
-    return Ok(format!("'{}' hook", path.replace('\'', "'\\''")));
+    return Ok(format!(
+        "'{}' hook --agent codex",
+        path.replace('\'', "'\\''")
+    ));
 }
 
 fn owned_handler(handler: &Value) -> bool {
@@ -237,7 +331,7 @@ fn owned_handler(handler: &Value) -> bool {
         && handler["statusMessage"] == HOOK_STATUS
         && handler["command"]
             .as_str()
-            .is_some_and(|command| command.ends_with(" hook"))
+            .is_some_and(|command| command.contains(" hook"))
 }
 
 fn has_owned_hooks() -> Result<bool, Box<dyn std::error::Error>> {

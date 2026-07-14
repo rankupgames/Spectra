@@ -1,9 +1,11 @@
 mod hermes;
+mod hooks;
 mod json;
 mod jsonc;
+mod local;
 
 use std::{
-    env,
+    env, fs,
     io::Write,
     path::{Path, PathBuf},
 };
@@ -45,27 +47,105 @@ pub(crate) enum Agent {
     Kiro,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct JsonTarget {
     pub label: &'static str,
     pub root_key: &'static str,
-    pub path: fn() -> Result<PathBuf, BoxError>,
+    pub path: PathBuf,
     pub args: &'static [&'static str],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub(crate) enum Location {
+    Global,
+    Local,
 }
 
 const STDIO_ARGS: &[&str] = &["serve", "--mcp"];
 const CURSOR_STDIO_ARGS: &[&str] = &["serve", "--mcp", "--path", "${workspaceFolder}"];
 
-pub(crate) fn install(selection: Agent, dry_run: bool) -> Result<Report, BoxError> {
-    run_selected(selection, |agent| install_one(agent, dry_run))
+const CLAUDE_HOOK_EVENTS: &[(&str, Option<&str>)] = &[
+    ("SessionStart", Some("startup|resume|clear|compact")),
+    ("UserPromptSubmit", None),
+    (
+        "PermissionRequest",
+        Some("Bash|apply_patch|Edit|Write|MultiEdit"),
+    ),
+    ("PostToolUse", Some("Bash|apply_patch|Edit|Write|MultiEdit")),
+    ("Stop", None),
+];
+const GEMINI_HOOK_EVENTS: &[(&str, Option<&str>)] = &[
+    ("SessionStart", None),
+    ("BeforeAgent", None),
+    ("AfterTool", Some("write_file|replace|run_shell_command")),
+    ("AfterAgent", None),
+];
+const CURSOR_HOOK_EVENTS: &[(&str, Option<&str>)] = &[
+    ("sessionStart", None),
+    ("afterFileEdit", None),
+    ("afterShellExecution", None),
+    ("postToolUse", None),
+    ("stop", None),
+];
+
+pub(crate) fn install(
+    selection: Agent,
+    dry_run: bool,
+    topology_only: bool,
+    location: Location,
+    project: &Path,
+) -> Result<Report, BoxError> {
+    let mut report = Report {
+        messages: Vec::new(),
+        errors: Vec::new(),
+    };
+    for agent in selected(selection)? {
+        match install_one(agent, dry_run, topology_only, location, project) {
+            Ok(message) => report.messages.push(format!(
+                "{message}\n{}: Capability={}",
+                label(agent),
+                if topology_only {
+                    "topology"
+                } else {
+                    capability(agent)
+                }
+            )),
+            Err(error) => report.errors.push(format!("{}: {error}", label(agent))),
+        }
+    }
+    Ok(report)
 }
 
-pub(crate) fn uninstall(selection: Agent, dry_run: bool) -> Result<Report, BoxError> {
-    run_selected(selection, |agent| uninstall_one(agent, dry_run))
+pub(crate) fn uninstall(
+    selection: Agent,
+    dry_run: bool,
+    location: Location,
+    project: &Path,
+) -> Result<Report, BoxError> {
+    run_selected(selection, |agent| {
+        uninstall_one(agent, dry_run, location, project)
+    })
 }
 
 pub(crate) fn status(selection: Agent) -> Result<Report, BoxError> {
     run_selected(selection, status_one)
+}
+
+pub(crate) fn status_detected() -> Report {
+    let mut report = Report {
+        messages: Vec::new(),
+        errors: Vec::new(),
+    };
+    for agent in TARGETS.into_iter().filter(|agent| detected(*agent)) {
+        match status_one(agent) {
+            Ok(message) => report.messages.push(message),
+            Err(error) => report.errors.push(format!("{}: {error}", label(agent))),
+        }
+    }
+    if report.messages.is_empty() && report.errors.is_empty() {
+        report.messages.push("No supported agents detected; topology remains available through manual MCP configuration.".into());
+    }
+    report
 }
 
 fn run_selected(
@@ -103,21 +183,142 @@ fn selected(selection: Agent) -> Result<Vec<Agent>, BoxError> {
     }
 }
 
-fn install_one(agent: Agent, dry_run: bool) -> Result<String, BoxError> {
+fn install_one(
+    agent: Agent,
+    dry_run: bool,
+    topology_only: bool,
+    location: Location,
+    project: &Path,
+) -> Result<String, BoxError> {
+    if location == Location::Local
+        && !matches!(
+            agent,
+            Agent::Codex | Agent::Claude | Agent::Cursor | Agent::Gemini
+        )
+    {
+        return Err(format!(
+            "{} does not have a verified project-local installer",
+            label(agent)
+        )
+        .into());
+    }
     match agent {
+        Agent::Codex if location == Location::Local => {
+            local::install_codex(project, dry_run, topology_only)
+        }
+        Agent::Codex if topology_only => {
+            Ok(crate::install::install_codex_topology_only(dry_run)?.to_string())
+        }
         Agent::Codex => Ok(crate::install::install_codex(dry_run)?.to_string()),
         Agent::OpenCode => jsonc::install(dry_run),
         Agent::Hermes => hermes::install(dry_run),
-        agent => json::install(json_target(agent)?, dry_run),
+        agent => {
+            let hook = (!topology_only && has_ledger(agent))
+                .then(|| hook_target(agent, location, project))
+                .transpose()?;
+            if let Some(hook) = &hook {
+                hooks::install(hook, true)?;
+            }
+            let target = json_target(agent, location, project)?;
+            let snapshot = (!dry_run)
+                .then(|| ConfigSnapshot::capture(&target.path))
+                .transpose()?;
+            let mut message = json::install(target, dry_run)?;
+            if let Some(hook) = &hook {
+                message.push('\n');
+                match hooks::install(hook, dry_run) {
+                    Ok(hook_message) => message.push_str(&hook_message),
+                    Err(error) => {
+                        if let Some(snapshot) = snapshot {
+                            snapshot.restore().map_err(|rollback| {
+                                format!("{error}; additionally failed to roll back MCP configuration: {rollback}")
+                            })?;
+                        }
+                        return Err(error);
+                    }
+                }
+            }
+            Ok(message)
+        }
     }
 }
 
-fn uninstall_one(agent: Agent, dry_run: bool) -> Result<String, BoxError> {
+struct ConfigSnapshot {
+    path: PathBuf,
+    contents: Option<Vec<u8>>,
+}
+
+impl ConfigSnapshot {
+    fn capture(path: &Path) -> Result<Self, BoxError> {
+        Ok(Self {
+            path: path.to_path_buf(),
+            contents: path.exists().then(|| fs::read(path)).transpose()?,
+        })
+    }
+
+    fn restore(self) -> Result<(), BoxError> {
+        if let Some(contents) = self.contents {
+            write_atomic(&self.path, &contents)
+        } else if self.path.exists() {
+            fs::remove_file(&self.path)?;
+            Ok(())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn uninstall_one(
+    agent: Agent,
+    dry_run: bool,
+    location: Location,
+    project: &Path,
+) -> Result<String, BoxError> {
+    if location == Location::Local
+        && !matches!(
+            agent,
+            Agent::Codex | Agent::Claude | Agent::Cursor | Agent::Gemini
+        )
+    {
+        return Err(format!(
+            "{} does not have a verified project-local installer",
+            label(agent)
+        )
+        .into());
+    }
     match agent {
+        Agent::Codex if location == Location::Local => local::uninstall_codex(project, dry_run),
         Agent::Codex => Ok(crate::install::uninstall_codex(dry_run)?.to_string()),
         Agent::OpenCode => jsonc::uninstall(dry_run),
         Agent::Hermes => hermes::uninstall(dry_run),
-        agent => json::uninstall(json_target(agent)?, dry_run),
+        agent => {
+            let hook = has_ledger(agent)
+                .then(|| hook_target(agent, location, project))
+                .transpose()?;
+            if let Some(hook) = &hook {
+                hooks::uninstall(hook, true)?;
+            }
+            let target = json_target(agent, location, project)?;
+            let snapshot = (!dry_run)
+                .then(|| ConfigSnapshot::capture(&target.path))
+                .transpose()?;
+            let mut message = json::uninstall(target, dry_run)?;
+            if let Some(hook) = &hook {
+                message.push('\n');
+                match hooks::uninstall(hook, dry_run) {
+                    Ok(hook_message) => message.push_str(&hook_message),
+                    Err(error) => {
+                        if let Some(snapshot) = snapshot {
+                            snapshot.restore().map_err(|rollback| {
+                                format!("{error}; additionally failed to roll back MCP configuration: {rollback}")
+                            })?;
+                        }
+                        return Err(error);
+                    }
+                }
+            }
+            Ok(message)
+        }
     }
 }
 
@@ -126,40 +327,150 @@ fn status_one(agent: Agent) -> Result<String, BoxError> {
         Agent::Codex => crate::install::codex_status(),
         Agent::OpenCode => jsonc::status(),
         Agent::Hermes => hermes::status(),
-        agent => json::status(json_target(agent)?),
+        agent => {
+            let mut message = json::status(json_target(agent, Location::Global, Path::new("."))?)?;
+            if has_ledger(agent) {
+                let status = hooks::status(&hook_target(agent, Location::Global, Path::new("."))?)?;
+                message = format!(
+                    "{}: MCP={}, Ledger hooks={}, Capability={}",
+                    label(agent),
+                    message
+                        .split("MCP=")
+                        .nth(1)
+                        .and_then(|v| v.split(',').next())
+                        .unwrap_or("unknown"),
+                    status,
+                    capability(agent)
+                );
+            }
+            Ok(message)
+        }
     }
 }
 
-fn json_target(agent: Agent) -> Result<JsonTarget, BoxError> {
+fn has_ledger(agent: Agent) -> bool {
+    matches!(
+        agent,
+        Agent::Codex | Agent::Claude | Agent::Gemini | Agent::Cursor
+    )
+}
+
+pub(crate) fn capability(agent: Agent) -> &'static str {
+    match agent {
+        Agent::Cursor => "topology+ledger-partial",
+        Agent::Codex | Agent::Claude | Agent::Gemini => "topology+ledger",
+        _ => "topology",
+    }
+}
+
+pub(crate) fn detected_summaries() -> Vec<String> {
+    TARGETS
+        .into_iter()
+        .filter(|agent| detected(*agent))
+        .map(|agent| format!("{} — {}", label(agent), capability(agent)))
+        .collect()
+}
+
+fn hook_target(
+    agent: Agent,
+    location: Location,
+    project: &Path,
+) -> Result<hooks::HookTarget, BoxError> {
+    let target = match agent {
+        Agent::Claude => hooks::HookTarget {
+            label: "Claude Code",
+            agent: "claude",
+            path: if location == Location::Local {
+                project.join(".claude/settings.json")
+            } else {
+                companion_path(
+                    "SPECTRA_CLAUDE_SETTINGS",
+                    "SPECTRA_CLAUDE_CONFIG",
+                    ".claude/settings.json",
+                    "claude-hooks.json",
+                )?
+            },
+            schema: hooks::HookSchema::Grouped,
+            events: CLAUDE_HOOK_EVENTS,
+        },
+        Agent::Gemini => hooks::HookTarget {
+            label: "Gemini CLI",
+            agent: "gemini",
+            path: if location == Location::Local {
+                project.join(".gemini/settings.json")
+            } else {
+                gemini_path()?
+            },
+            schema: hooks::HookSchema::Grouped,
+            events: GEMINI_HOOK_EVENTS,
+        },
+        Agent::Cursor => hooks::HookTarget {
+            label: "Cursor",
+            agent: "cursor",
+            path: if location == Location::Local {
+                project.join(".cursor/hooks.json")
+            } else {
+                companion_path(
+                    "SPECTRA_CURSOR_HOOKS",
+                    "SPECTRA_CURSOR_CONFIG",
+                    ".cursor/hooks.json",
+                    "cursor-hooks.json",
+                )?
+            },
+            schema: hooks::HookSchema::Cursor,
+            events: CURSOR_HOOK_EVENTS,
+        },
+        _ => return Err("agent does not provide external Ledger hook configuration".into()),
+    };
+    Ok(target)
+}
+
+fn json_target(agent: Agent, location: Location, project: &Path) -> Result<JsonTarget, BoxError> {
     let target = match agent {
         Agent::Claude => JsonTarget {
             label: "Claude Code",
             root_key: "mcpServers",
-            path: claude_path,
+            path: if location == Location::Local {
+                project.join(".mcp.json")
+            } else {
+                claude_path()?
+            },
             args: STDIO_ARGS,
         },
         Agent::Cursor => JsonTarget {
             label: "Cursor",
             root_key: "mcpServers",
-            path: cursor_path,
-            args: CURSOR_STDIO_ARGS,
+            path: if location == Location::Local {
+                project.join(".cursor/mcp.json")
+            } else {
+                cursor_path()?
+            },
+            args: if location == Location::Local {
+                STDIO_ARGS
+            } else {
+                CURSOR_STDIO_ARGS
+            },
         },
         Agent::Gemini => JsonTarget {
             label: "Gemini CLI",
             root_key: "mcpServers",
-            path: gemini_path,
+            path: if location == Location::Local {
+                project.join(".gemini/settings.json")
+            } else {
+                gemini_path()?
+            },
             args: STDIO_ARGS,
         },
         Agent::Antigravity => JsonTarget {
             label: "Antigravity",
             root_key: "mcpServers",
-            path: antigravity_path,
+            path: antigravity_path()?,
             args: STDIO_ARGS,
         },
         Agent::Kiro => JsonTarget {
             label: "Kiro",
             root_key: "mcpServers",
-            path: kiro_path,
+            path: kiro_path()?,
             args: STDIO_ARGS,
         },
         _ => return Err("agent does not use the standard JSON adapter".into()),
@@ -257,6 +568,22 @@ fn configured_path(variable: &str, relative: &str) -> Result<PathBuf, BoxError> 
     } else {
         home_path(relative).ok_or_else(|| "unable to locate the user home directory".into())
     }
+}
+
+fn companion_path(
+    direct_variable: &str,
+    config_variable: &str,
+    fallback: &str,
+    sibling: &str,
+) -> Result<PathBuf, BoxError> {
+    if let Some(path) = env::var_os(direct_variable) {
+        return Ok(PathBuf::from(path));
+    }
+    if let Some(config) = env::var_os(config_variable) {
+        let config = PathBuf::from(config);
+        return Ok(config.parent().unwrap_or(Path::new(".")).join(sibling));
+    }
+    configured_path(direct_variable, fallback)
 }
 
 fn home_path(relative: &str) -> Option<PathBuf> {

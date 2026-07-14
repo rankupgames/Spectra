@@ -1,6 +1,7 @@
 //! Append-only, replay-derived agent context state.
 
 use std::{
+    collections::BTreeMap,
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
@@ -19,6 +20,7 @@ const LEDGER_LOCK_PATH: &str = ".spectra/ledger-v1.lock";
 const LOCK_ATTEMPTS: usize = 1_000;
 const LOCK_RETRY: Duration = Duration::from_millis(2);
 const STALE_LOCK_AGE: Duration = Duration::from_secs(30);
+const LEGACY_LANE: &str = "__legacy__";
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -39,6 +41,19 @@ pub struct LedgerAnchor {
     pub path: String,
     pub start_line: u32,
     pub end_line: u32,
+}
+
+/// Identifies the harness session whose state machine owns an event.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct LedgerSource {
+    pub harness: String,
+    pub session_id: String,
+}
+
+impl LedgerSource {
+    fn key(&self) -> String {
+        format!("{}:{}", self.harness, self.session_id)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -67,6 +82,10 @@ pub enum LedgerEventKind {
     EditApplied {
         paths: Vec<String>,
     },
+    /// A mutation observed by a harness that does not expose an authorization event.
+    EditObserved {
+        paths: Vec<String>,
+    },
     VerificationStarted {
         command: String,
     },
@@ -93,6 +112,8 @@ pub struct LedgerEvent {
     pub state_after: LedgerState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correlation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<LedgerSource>,
     pub kind: LedgerEventKind,
 }
 
@@ -109,6 +130,7 @@ pub struct LedgerStore {
     path: PathBuf,
     events: Vec<LedgerEvent>,
     state: LedgerState,
+    states: BTreeMap<String, LedgerState>,
     recovered_truncated_tail: bool,
 }
 
@@ -131,11 +153,13 @@ impl LedgerStore {
                 path,
                 events: Vec::new(),
                 state: LedgerState::Idle,
+                states: BTreeMap::new(),
                 recovered_truncated_tail: false,
             });
         }
         let bytes = fs::read(&path)?;
         let mut events = Vec::new();
+        let mut states = BTreeMap::new();
         let mut valid_bytes = 0_usize;
         let mut recovered = false;
         for chunk in bytes.split_inclusive(|byte| *byte == b'\n') {
@@ -151,7 +175,7 @@ impl LedgerStore {
             }
             match serde_json::from_slice::<LedgerEvent>(record) {
                 Ok(event) if complete => {
-                    validate_replay_event(&events, &event)?;
+                    validate_replay_event(&events, &mut states, &event)?;
                     events.push(event);
                     valid_bytes += chunk.len();
                 }
@@ -181,6 +205,7 @@ impl LedgerStore {
             path,
             events,
             state,
+            states,
             recovered_truncated_tail: recovered,
         })
     }
@@ -193,6 +218,10 @@ impl LedgerStore {
         self.state
     }
 
+    pub fn state_for(&self, source: &LedgerSource) -> LedgerState {
+        self.states.get(&source.key()).copied().unwrap_or_default()
+    }
+
     pub fn events(&self) -> &[LedgerEvent] {
         &self.events
     }
@@ -202,7 +231,15 @@ impl LedgerStore {
     }
 
     pub fn append(&mut self, kind: LedgerEventKind) -> Result<&LedgerEvent> {
-        self.append_correlated(kind, None)
+        self.append_correlated(kind, None, None)
+    }
+
+    pub fn append_for(
+        &mut self,
+        source: LedgerSource,
+        kind: LedgerEventKind,
+    ) -> Result<&LedgerEvent> {
+        self.append_correlated(kind, None, Some(source))
     }
 
     /// Appends once for a stable adapter event ID, making hook retries idempotent.
@@ -219,15 +256,39 @@ impl LedgerStore {
         {
             return Ok(&self.events[index]);
         }
-        self.append_correlated(kind, Some(redact_text(&correlation_id)))
+        self.append_correlated(kind, Some(redact_text(&correlation_id)), None)
+    }
+
+    /// Appends once within a harness session while retaining the source lane.
+    pub fn append_once_for(
+        &mut self,
+        source: LedgerSource,
+        correlation_id: impl Into<String>,
+        kind: LedgerEventKind,
+    ) -> Result<&LedgerEvent> {
+        let correlation_id = redact_text(&correlation_id.into());
+        if let Some(index) = self
+            .events
+            .iter()
+            .position(|event| event.correlation_id.as_deref() == Some(&correlation_id))
+        {
+            return Ok(&self.events[index]);
+        }
+        self.append_correlated(kind, Some(correlation_id), Some(source))
     }
 
     fn append_correlated(
         &mut self,
         kind: LedgerEventKind,
         correlation_id: Option<String>,
+        source: Option<LedgerSource>,
     ) -> Result<&LedgerEvent> {
-        let state_after = transition(self.state, &kind)?;
+        let source = source.map(redact_source);
+        let state_before = source
+            .as_ref()
+            .map(|source| self.state_for(source))
+            .unwrap_or_else(|| self.states.get(LEGACY_LANE).copied().unwrap_or_default());
+        let state_after = transition(state_before, &kind)?;
         let event = LedgerEvent {
             version: LEDGER_VERSION,
             sequence: self.events.len() as u64 + 1,
@@ -235,9 +296,10 @@ impl LedgerStore {
                 .duration_since(UNIX_EPOCH)
                 .map_err(|error| Error::Ledger(error.to_string()))?
                 .as_millis(),
-            state_before: self.state,
+            state_before,
             state_after,
             correlation_id,
+            source: source.clone(),
             kind: redact_event(kind),
         };
         if let Some(parent) = self.path.parent() {
@@ -252,12 +314,25 @@ impl LedgerStore {
         file.write_all(&encoded)?;
         file.sync_data()?;
         self.state = state_after;
+        if let Some(source) = source {
+            self.states.insert(source.key(), state_after);
+        } else {
+            self.states.insert(LEGACY_LANE.into(), state_after);
+        }
         self.events.push(event);
         Ok(self.events.last().expect("event was appended"))
     }
 
     pub fn projection(&self) -> LedgerProjection {
-        let mut lines = vec![format!("S{} {:?}", self.events.len(), self.state)];
+        self.projection_with_state(self.state)
+    }
+
+    pub fn projection_for(&self, source: &LedgerSource) -> LedgerProjection {
+        self.projection_with_state(self.state_for(source))
+    }
+
+    fn projection_with_state(&self, state: LedgerState) -> LedgerProjection {
+        let mut lines = vec![format!("S{} {:?}", self.events.len(), state)];
         for selector in [
             ProjectionSelector::Map,
             ProjectionSelector::Edit,
@@ -278,7 +353,7 @@ impl LedgerStore {
             text = text.chars().take(579).collect::<String>() + "…";
         }
         LedgerProjection {
-            state: self.state,
+            state,
             sequence: self.events.len() as u64,
             estimated_tokens: text.chars().count().div_ceil(4),
             text,
@@ -371,6 +446,7 @@ fn transition(state: LedgerState, event: &LedgerEventKind) -> Result<LedgerState
         }
         Event::EditAuthorized { .. } if state == State::AwaitingAuthorization => State::Editing,
         Event::EditApplied { .. } if state == State::Editing => State::Editing,
+        Event::EditObserved { .. } => State::Editing,
         Event::VerificationStarted { .. } if state == State::Editing => State::Verifying,
         Event::VerificationFinished { success: true, .. } if state == State::Verifying => {
             State::Complete
@@ -379,11 +455,7 @@ fn transition(state: LedgerState, event: &LedgerEventKind) -> Result<LedgerState
             State::Blocked
         }
         Event::Blocked { .. } => State::Blocked,
-        Event::Completed { .. }
-            if matches!(state, State::Editing | State::Verifying | State::Complete) =>
-        {
-            State::Complete
-        }
+        Event::Completed { .. } => State::Complete,
         _ => {
             return Err(Error::Ledger(format!(
                 "invalid transition from {state:?} via {}",
@@ -394,12 +466,28 @@ fn transition(state: LedgerState, event: &LedgerEventKind) -> Result<LedgerState
     Ok(next)
 }
 
-fn validate_replay_event(events: &[LedgerEvent], event: &LedgerEvent) -> Result<()> {
+fn validate_replay_event(
+    events: &[LedgerEvent],
+    states: &mut BTreeMap<String, LedgerState>,
+    event: &LedgerEvent,
+) -> Result<()> {
     let expected_sequence = events.len() as u64 + 1;
-    let state = events
-        .last()
-        .map(|previous| previous.state_after)
-        .unwrap_or_default();
+    let state = event
+        .source
+        .as_ref()
+        .and_then(|source| states.get(&source.key()).copied())
+        .unwrap_or_else(|| {
+            if event.source.is_none() {
+                events
+                    .iter()
+                    .rev()
+                    .find(|previous| previous.source.is_none())
+                    .map(|previous| previous.state_after)
+                    .unwrap_or_default()
+            } else {
+                LedgerState::default()
+            }
+        });
     if event.version != LEDGER_VERSION
         || event.sequence != expected_sequence
         || event.state_before != state
@@ -410,7 +498,18 @@ fn validate_replay_event(events: &[LedgerEvent], event: &LedgerEvent) -> Result<
             event.sequence
         )));
     }
+    if let Some(source) = &event.source {
+        states.insert(source.key(), event.state_after);
+    } else {
+        states.insert(LEGACY_LANE.into(), event.state_after);
+    }
     Ok(())
+}
+
+fn redact_source(mut source: LedgerSource) -> LedgerSource {
+    source.harness = redact_text(&source.harness).chars().take(48).collect();
+    source.session_id = redact_text(&source.session_id).chars().take(96).collect();
+    source
 }
 
 fn redact_event(mut event: LedgerEventKind) -> LedgerEventKind {
@@ -424,7 +523,7 @@ fn redact_event(mut event: LedgerEventKind) -> LedgerEventKind {
         LedgerEventKind::VerificationFinished { command, .. } => {
             *command = redact_text(command);
         }
-        LedgerEventKind::EditApplied { paths } => {
+        LedgerEventKind::EditApplied { paths } | LedgerEventKind::EditObserved { paths } => {
             for path in paths {
                 *path = redact_text(path);
             }
@@ -482,7 +581,9 @@ fn project_event(event: &LedgerEventKind) -> Vec<String> {
                 anchor_text,
             ]
         }
-        LedgerEventKind::EditApplied { paths } => vec![format!("edit {}", paths.join(","))],
+        LedgerEventKind::EditApplied { paths } | LedgerEventKind::EditObserved { paths } => {
+            vec![format!("edit {}", paths.join(","))]
+        }
         LedgerEventKind::VerificationFinished {
             command,
             success,
@@ -510,7 +611,10 @@ impl ProjectionSelector {
     fn matches(self, event: &LedgerEventKind) -> bool {
         match self {
             Self::Map => matches!(event, LedgerEventKind::MapRendered { .. }),
-            Self::Edit => matches!(event, LedgerEventKind::EditApplied { .. }),
+            Self::Edit => matches!(
+                event,
+                LedgerEventKind::EditApplied { .. } | LedgerEventKind::EditObserved { .. }
+            ),
             Self::Verification => matches!(event, LedgerEventKind::VerificationFinished { .. }),
             Self::Terminal => matches!(
                 event,
@@ -527,6 +631,7 @@ fn event_name(event: &LedgerEventKind) -> &'static str {
         LedgerEventKind::AuthorizationRequested { .. } => "authorization_requested",
         LedgerEventKind::EditAuthorized { .. } => "edit_authorized",
         LedgerEventKind::EditApplied { .. } => "edit_applied",
+        LedgerEventKind::EditObserved { .. } => "edit_observed",
         LedgerEventKind::VerificationStarted { .. } => "verification_started",
         LedgerEventKind::VerificationFinished { .. } => "verification_finished",
         LedgerEventKind::Blocked { .. } => "blocked",
@@ -803,6 +908,49 @@ mod tests {
             replay.events()[0].correlation_id.as_deref(),
             Some("codex:event-1")
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn harness_sessions_reduce_independently_and_share_project_facts() {
+        let root = temp_project("session-lanes");
+        let first = LedgerSource {
+            harness: "claude".into(),
+            session_id: "one".into(),
+        };
+        let second = LedgerSource {
+            harness: "gemini".into(),
+            session_id: "two".into(),
+        };
+        LedgerStore::transaction(&root, |ledger| {
+            ledger.append_once_for(
+                first.clone(),
+                "claude:one:edit",
+                LedgerEventKind::EditObserved {
+                    paths: vec!["src/lib.rs".into()],
+                },
+            )?;
+            ledger.append_once_for(
+                second.clone(),
+                "gemini:two:blocked",
+                LedgerEventKind::Blocked {
+                    reason: "waiting for input".into(),
+                },
+            )?;
+            assert_eq!(ledger.state_for(&first), LedgerState::Editing);
+            assert_eq!(ledger.state_for(&second), LedgerState::Blocked);
+            assert!(
+                ledger
+                    .projection_for(&second)
+                    .text
+                    .contains("edit src/lib.rs")
+            );
+            Ok(())
+        })
+        .unwrap();
+        let replay = LedgerStore::open(&root).unwrap();
+        assert_eq!(replay.state_for(&first), LedgerState::Editing);
+        assert_eq!(replay.state_for(&second), LedgerState::Blocked);
         fs::remove_dir_all(root).unwrap();
     }
 }

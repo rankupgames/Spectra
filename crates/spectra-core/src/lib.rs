@@ -12,7 +12,8 @@ pub use adapters::{SupportedLanguage, is_supported_path, supported_languages};
 pub use error::{Error, Result};
 pub use index::{CodeIndex, INDEX_VERSION, IndexReport, SourceSpan};
 pub use ledger::{
-    LedgerAnchor, LedgerEvent, LedgerEventKind, LedgerProjection, LedgerState, LedgerStore,
+    LedgerAnchor, LedgerEvent, LedgerEventKind, LedgerProjection, LedgerSource, LedgerState,
+    LedgerStore,
 };
 pub use render::{MapArtifact, MapRelation, RenderOptions, SourceAnchor, render_map};
 pub use select::{Selection, SelectionOptions, select_subgraph};

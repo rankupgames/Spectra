@@ -27,7 +27,7 @@ rmcp.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-spectra-core = { package = "spectra-context-core", version = "0.2.1", path = "../spectra-core" }
+spectra-core = { package = "spectra-context-core", version = "0.3.0", path = "../spectra-core" }
 tokio.workspace = true
 
 [[bin]]
