@@ -12,6 +12,9 @@ keywords = ["ai-agents", "mcp", "code-analysis", "tree-sitter", "context"]
 categories = ["command-line-utilities", "development-tools"]
 publish = false
 
+[features]
+svg-raster-compat = ["spectra-render/svg-raster-compat"]
+
 [[bin]]
 name = "spectra"
 path = "src/main.rs"
@@ -27,6 +30,7 @@ rmcp.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 spectra-core = { package = "spectra-context-core", version = "0.3.0", path = "../spectra-core" }
 spectra-render = { package = "spectra-context-render", version = "0.3.0", path = "../spectra-render" }
 tokio.workspace = true

@@ -39,10 +39,16 @@ cargo build --release --workspace
   --codegraph-bin /path/to/codegraph \
   --spectra-bin /path/to/spectra \
   --reindex \
-  --repeats 3
+  --repeats 3 \
+  --raster-backend direct
 ```
 
 The runner verifies commit SHAs, records tool versions and cold indexing times, performs repeated warm queries, saves every raw CodeGraph response and Spectra image, estimates text-only tokens at four characters per token, and computes expected-anchor path recall. The estimate deliberately excludes vision tokens; only provider-reported usage can complete the final comparison.
+
+For a same-Scene compatibility arm, build the CLI with
+`--features svg-raster-compat` and rerun into a fresh output directory with
+`--raster-backend svg-compat`. The two reports must retain byte-identical SVGs
+and identical compact metadata before model quality is compared.
 
 Generated reports are written under `benchmarks/results/`. That directory is intentionally ignored by Git; publish selected results separately when they have been reviewed for release.
 
@@ -99,7 +105,7 @@ The post-hook deterministic regression must preserve the 93.4% median reduction 
 
 ## Grok multimodal evaluation
 
-`spectra-grok-eval` consumes an existing deterministic `results.json`, so model calls do not rebuild indexes or regenerate payloads. It uses xAI's Responses API with `grok-4.5`, low reasoning effort, low image detail, `store: false`, and identical system instructions for both arms. `XAI_KEY` is loaded from the process environment or an ignored `.env` file and is never written to an artifact.
+`spectra-grok-eval` consumes an existing deterministic `results.json`, so model calls do not rebuild indexes or regenerate payloads. Direct xAI Responses API remains the historical default. The explicit OpenRouter path uses `x-ai/grok-4.5`, low reasoning effort, low image detail, temperature 0, top-p 1, a fixed seed, required parameter support, and no provider fallback. The selected provider key is loaded from the process environment or an ignored `.env` file and is never written to an artifact. A content-bound `evaluation-binding.json` prevents resuming results under different provider, model, settings, or source inputs.
 
 Start with one prompt before spending on the full corpus:
 
@@ -111,6 +117,38 @@ Start with one prompt before spending on the full corpus:
 ```
 
 Use `--limit 0` for the complete nine-prompt run. The evaluator records provider-reported input, cached, output, reasoning, and total tokens; billed cost; raw answers; and simple concept/anchor lexical-recall proxies. The proxies are diagnostics, not a substitute for a blind human or independent model judge.
+
+For the OpenRouter replication, use a new output directory:
+
+```sh
+OPENROUTER_API_KEY='<credential>' ./target/release/spectra-grok-eval \
+  --provider openrouter \
+  --results benchmarks/results/run-name/results.json \
+  --output benchmarks/results/grok-openrouter-run \
+  --fresh-output \
+  --limit 0
+```
+
+The output binding includes SHA-256 digests of `results.json`, every exact
+provider input, and the CodeGraph control bundle. For a paired direct-versus-
+compatibility renderer run, pass the reviewed direct report to the compatibility
+arm so it reuses the exact CodeGraph provider responses while still issuing one
+fresh Spectra request per prompt:
+
+```sh
+OPENROUTER_API_KEY='<credential>' ./target/release/spectra-grok-eval \
+  --provider openrouter \
+  --results benchmarks/results/svg-compat/results.json \
+  --output benchmarks/results/grok-svg-compat \
+  --reference-codegraph-report benchmarks/results/grok-direct/grok-evaluation.json \
+  --fresh-output \
+  --limit 0
+```
+
+The reference report is accepted only when its provider, model, decoding
+settings, prompt identities, expected concepts/anchors, and raw CodeGraph
+contexts produce the same content hash. Referenced raw responses are copied into
+the new evidence directory and revalidated; no second control generation occurs.
 
 For a one-prompt-per-project gate, combine `--limit 0` with repeated filters:
 

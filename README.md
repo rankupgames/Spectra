@@ -45,7 +45,7 @@ Most code-context tools answer with source and explanation together. That can be
 | Ledger fact retention | **100%** |
 | Maximum Ledger projection | **57 tokens** |
 
-These numbers come from nine frozen prompts across pinned ripgrep, Tokio, and rust-analyzer repositories using Grok 4.5. They are encouraging, but they are still prototype results—not a promise that every model and repository will behave the same way. The reproducible methodology, prompts, and limitations are documented in the [benchmark protocol](benchmarks/README.md). Generated result artifacts stay local and are not committed.
+The topology results come from nine frozen prompts across pinned ripgrep, Tokio, and rust-analyzer repositories using Grok 4.5. The Ledger results come from three deterministic synthetic transcript scenarios using the benchmark's four-characters-per-token estimate. They are encouraging, but they are still prototype results—not a promise that every model and repository will behave the same way. The reproducible methodology, prompts, and limitations are documented in the [benchmark protocol](benchmarks/README.md). Generated result artifacts stay local and are not committed.
 
 ## Quickstart
 
@@ -105,6 +105,21 @@ Or render a map directly:
 ```sh
 spectra map "how does request routing reach persistence" --path /path/to/project
 ```
+
+The default binary renders the canonical Scene directly with `tiny-skia`. The
+original SVG-to-PNG path remains an opt-in compatibility backend for paired
+quality and performance checks:
+
+```sh
+cargo build --release -p spectra-context --features svg-raster-compat
+spectra map "how does request routing reach persistence" \
+  --path /path/to/project \
+  --raster-backend svg-compat
+```
+
+Without that feature, the CLI and library do not compile `resvg` or its font
+stack. Both backends retain the same canonical SVG, stable anchors, and
+relations; only PNG rasterization changes.
 
 Spectra returns a PNG and compact semantic metadata:
 
@@ -217,9 +232,10 @@ args = ["serve", "--mcp"]
 
 ## Architecture
 
-The workspace is intentionally split into two small layers:
+The workspace is intentionally split into three layers:
 
-- **`spectra-core`:** packed graph primitives, language-adapter extraction and resolution, deterministic selection and rendering, incremental indexing, and the State Machine Ledger.
+- **`spectra-core`:** packed graph primitives, language-adapter extraction and resolution, deterministic selection, incremental indexing, and the State Machine Ledger. It has no renderer or CLI dependency.
+- **`spectra-render`:** deterministic graph-to-Scene compilation, Scene-to-SVG output, the default direct Scene-to-PNG backend, and the optional SVG-to-PNG compatibility backend.
 - **`spectra`:** CLI commands, stdio MCP transport, watcher-backed automatic synchronization, multi-agent installation, harness-neutral lifecycle ingestion, private provider-hook translation, and benchmark runners.
 
 The internal graph kernel is domain-neutral:

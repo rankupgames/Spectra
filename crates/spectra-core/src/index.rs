@@ -20,6 +20,7 @@ use crate::{
 };
 
 pub const INDEX_VERSION: u32 = 4;
+const INDEX_EXTRACTOR_REVISION: u32 = 1;
 const INDEX_PATH: &str = ".spectra/index-v4.json";
 const INDEX_LOCK_PATH: &str = ".spectra/index-v4.lock";
 const INDEX_LOCK_ATTEMPTS: usize = 1_000;
@@ -54,6 +55,8 @@ pub struct IndexReport {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct IndexCache {
     version: u32,
+    #[serde(default)]
+    extractor_revision: u32,
     files: BTreeMap<String, CachedFile>,
 }
 
@@ -61,6 +64,7 @@ impl Default for IndexCache {
     fn default() -> Self {
         Self {
             version: INDEX_VERSION,
+            extractor_revision: INDEX_EXTRACTOR_REVISION,
             files: BTreeMap::new(),
         }
     }
@@ -109,7 +113,7 @@ impl CodeIndex {
             return Ok(None);
         }
         let cache = load_cache(&cache_path)?;
-        if cache.version != INDEX_VERSION {
+        if cache.version != INDEX_VERSION || cache.extractor_revision != INDEX_EXTRACTOR_REVISION {
             return Ok(None);
         }
         assemble(&cache).map(Some)
@@ -166,7 +170,7 @@ impl CodeIndex {
 
         let cache_path = project.join(INDEX_PATH);
         let mut cache = load_cache(&cache_path).unwrap_or_default();
-        if cache.version != INDEX_VERSION {
+        if cache.version != INDEX_VERSION || cache.extractor_revision != INDEX_EXTRACTOR_REVISION {
             cache = IndexCache::default();
         }
 
@@ -804,6 +808,24 @@ mod tests {
         assert!(has_node(&file, "method", "run"));
         assert!(has_edge(&file, "implements", "Run"));
         assert!(has_edge(&file, "calls", "helper"));
+    }
+
+    #[test]
+    fn extracts_rust_items_and_calls_wrapped_by_top_level_macros() {
+        let file = parsed(
+            "src/lib.rs",
+            "feature_gate! { pub fn start() { start_inner(); } fn start_inner() {} }",
+        );
+        assert!(has_node(&file, "function", "start"));
+        assert!(has_node(&file, "function", "start_inner"));
+        assert!(has_edge(&file, "calls", "start_inner"));
+    }
+
+    #[test]
+    fn does_not_reparse_expression_macro_bodies_as_rust_items() {
+        let file = parsed("src/lib.rs", "fn run() { emit!(fn fabricated() {}); }");
+        assert!(has_node(&file, "function", "run"));
+        assert!(!has_node(&file, "function", "fabricated"));
     }
 
     #[test]

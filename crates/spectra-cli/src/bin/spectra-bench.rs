@@ -6,8 +6,24 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+enum RasterBackendArg {
+    #[default]
+    Direct,
+    SvgCompat,
+}
+
+impl RasterBackendArg {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::SvgCompat => "svg-compat",
+        }
+    }
+}
 
 #[derive(Debug, Parser)]
 #[command(about = "Run the deterministic Spectra versus CodeGraph benchmark arm")]
@@ -28,6 +44,9 @@ struct Args {
     /// Warm query repetitions; every sample and the median are recorded.
     #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u8).range(1..=10))]
     repeats: u8,
+    /// PNG backend forwarded to `spectra map`.
+    #[arg(long, value_enum, default_value_t = RasterBackendArg::Direct)]
+    raster_backend: RasterBackendArg,
 }
 
 #[derive(Debug, Deserialize)]
@@ -135,6 +154,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         version(&args.codegraph_bin, &["version"])?,
     );
     tools.insert("spectra".into(), version(&spectra_bin, &["--version"])?);
+    tools.insert(
+        "spectra_raster_backend".into(),
+        args.raster_backend.label().into(),
+    );
 
     let mut repositories = Vec::new();
     for repository in manifest.repositories {
@@ -190,6 +213,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "48",
                     "--out",
                     &out_arg,
+                    "--raster-backend",
+                    args.raster_backend.label(),
                 ],
                 &path,
             )?;

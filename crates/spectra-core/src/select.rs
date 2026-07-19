@@ -120,6 +120,18 @@ pub fn select_subgraph(index: &CodeIndex, query: &str, options: SelectionOptions
                     let architecture_bonus =
                         architecture_path_bonus(&term_groups[group_index], &flattened_terms, &path);
                     let file_affinity = symbol_file_affinity_bonus(&label, &path);
+                    let flow_module_entry_bonus = if flow_query
+                        && kind == "function"
+                        && path
+                            .rsplit('/')
+                            .next()
+                            .and_then(|file| file.strip_suffix(".rs"))
+                            == Some(label.as_str())
+                    {
+                        350
+                    } else {
+                        0
+                    };
                     let api_boundary_bonus = if matches!(kind, "function" | "method")
                         && (path.ends_with("/lib.rs") || path.ends_with("/mod.rs"))
                     {
@@ -144,6 +156,7 @@ pub fn select_subgraph(index: &CodeIndex, query: &str, options: SelectionOptions
                                 + context_bonus
                                 + architecture_bonus
                                 + file_affinity
+                                + flow_module_entry_bonus
                                 + api_boundary_bonus
                                 + compound_label_bonus
                                 + flow_kind_bonus
@@ -159,6 +172,7 @@ pub fn select_subgraph(index: &CodeIndex, query: &str, options: SelectionOptions
     }
     for candidates in &mut scored_by_group {
         candidates.sort();
+        diversify_candidate_paths(index, candidates);
     }
     scored_by_group.sort_by_key(|candidates| {
         candidates
@@ -277,6 +291,26 @@ pub fn select_subgraph(index: &CodeIndex, query: &str, options: SelectionOptions
         distances,
         truncated,
     }
+}
+
+fn diversify_candidate_paths(index: &CodeIndex, candidates: &mut Vec<(Reverse<i32>, NodeId)>) {
+    let mut seen_paths = BTreeSet::new();
+    let mut first_by_path = Vec::with_capacity(candidates.len());
+    let mut repeated_paths = Vec::new();
+    for candidate in candidates.drain(..) {
+        let path = index
+            .spans
+            .get(&candidate.1)
+            .map(|span| span.path.as_str())
+            .unwrap_or("");
+        if path.is_empty() || seen_paths.insert(path.to_owned()) {
+            first_by_path.push(candidate);
+        } else {
+            repeated_paths.push(candidate);
+        }
+    }
+    first_by_path.extend(repeated_paths);
+    *candidates = first_by_path;
 }
 
 fn qualified_owner(index: &CodeIndex, node: NodeId) -> Option<String> {
@@ -753,6 +787,63 @@ mod tests {
         let selection = select_subgraph(&index, "start", SelectionOptions { max_nodes: 2 });
         assert_eq!(selection.anchors, vec![a]);
         assert_eq!(selection.nodes, vec![a, b]);
+    }
+
+    #[test]
+    fn diversifies_repeated_term_candidates_across_source_paths() {
+        let mut graph = PackedGraph::default();
+        let exact = graph.add_node("function", "parse");
+        let same_file = graph.add_node("function", "parse_payload");
+        let other_file = graph.add_node("function", "parse_request");
+        let index = CodeIndex {
+            graph,
+            spans: [
+                (exact, span("src/parser.rs")),
+                (same_file, span("src/parser.rs")),
+                (other_file, span("src/request.rs")),
+            ]
+            .into(),
+            qualified_names: [
+                (exact, "parse".into()),
+                (same_file, "parse_payload".into()),
+                (other_file, "parse_request".into()),
+            ]
+            .into(),
+            version: 1,
+        };
+
+        let selection = select_subgraph(&index, "parse", SelectionOptions { max_nodes: 2 });
+
+        assert_eq!(selection.anchors, vec![exact, other_file]);
+    }
+
+    #[test]
+    fn flow_queries_prefer_free_functions_that_define_a_module_entry() {
+        let mut graph = PackedGraph::default();
+        let method = graph.add_node("method", "dispatch");
+        let entry = graph.add_node("function", "dispatch");
+        let index = CodeIndex {
+            graph,
+            spans: [
+                (method, span("src/request.rs")),
+                (entry, span("src/dispatch.rs")),
+            ]
+            .into(),
+            qualified_names: [
+                (method, "impl Request::dispatch".into()),
+                (entry, "dispatch".into()),
+            ]
+            .into(),
+            version: 1,
+        };
+
+        let selection = select_subgraph(
+            &index,
+            "How does a request dispatch flow?",
+            SelectionOptions { max_nodes: 1 },
+        );
+
+        assert_eq!(selection.anchors, vec![entry]);
     }
 
     #[test]

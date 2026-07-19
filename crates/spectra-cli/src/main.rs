@@ -16,7 +16,25 @@ use std::{
 use agents::{Agent, Location};
 use clap::{Parser, Subcommand, ValueEnum};
 use spectra_core::{CodeIndex, INDEX_VERSION, IndexReport, sync_project};
-use spectra_render::{MapArtifact, map_project};
+use spectra_render::{MapArtifact, RasterBackend, map_project_with_backend};
+
+#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+enum RasterBackendArg {
+    #[default]
+    Direct,
+    #[cfg(feature = "svg-raster-compat")]
+    SvgCompat,
+}
+
+impl From<RasterBackendArg> for RasterBackend {
+    fn from(value: RasterBackendArg) -> Self {
+        match value {
+            RasterBackendArg::Direct => Self::Direct,
+            #[cfg(feature = "svg-raster-compat")]
+            RasterBackendArg::SvgCompat => Self::SvgCompat,
+        }
+    }
+}
 
 #[derive(Debug, Parser)]
 #[command(
@@ -118,6 +136,9 @@ enum Command {
         max_nodes: u16,
         #[arg(long)]
         out: Option<PathBuf>,
+        /// PNG backend. SVG compatibility is available only in opt-in builds.
+        #[arg(long, value_enum, default_value_t = RasterBackendArg::Direct)]
+        raster_backend: RasterBackendArg,
     },
     /// Run Spectra's MCP server over stdio.
     Serve {
@@ -283,9 +304,16 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             path,
             max_nodes,
             out,
+            raster_backend,
         } => {
             let output = out.unwrap_or_else(|| path.join(".spectra/artifacts"));
-            let artifact = map_project(&path, &query, usize::from(max_nodes), &output)?;
+            let artifact = map_project_with_backend(
+                &path,
+                &query,
+                usize::from(max_nodes),
+                &output,
+                raster_backend.into(),
+            )?;
             println!("PNG {}", display_relative(&artifact.png_path, &path));
             println!("SVG {}", display_relative(&artifact.svg_path, &path));
             print_anchors(&artifact);
