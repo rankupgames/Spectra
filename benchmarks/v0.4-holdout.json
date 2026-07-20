@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "frozen_at": "2026-07-20",
+  "repositories": [
+    {"id":"ripgrep","url":"https://github.com/BurntSushi/ripgrep","commit":"59e318f5ace48db54f37bb67c152535bc17fa153","language":"Rust","public_boundary":"the rg CLI entry point","focus":"search execution and matching","verification":"cargo test --workspace"},
+    {"id":"tokio","url":"https://github.com/tokio-rs/tokio","commit":"ac6869a431d9d7e2a81ce5309f00730741d3462a","language":"Rust","public_boundary":"tokio::spawn","focus":"task scheduling and execution","verification":"cargo test -p tokio --lib"},
+    {"id":"django","url":"https://github.com/django/django","commit":"76e1bca1311ae7073a1fa4add6f9d19d709f0f09","language":"Python","public_boundary":"the WSGI/ASGI request handler","focus":"URL resolution and view dispatch","verification":"python -m tests.runtests urls"},
+    {"id":"flask","url":"https://github.com/pallets/flask","commit":"36e4a824f340fdee7ed50937ba8e7f6bc7d17f81","language":"Python","public_boundary":"Flask.wsgi_app","focus":"request dispatch to a view","verification":"pytest tests"},
+    {"id":"fastapi","url":"https://github.com/fastapi/fastapi","commit":"afe41126f624af30038cc8e17b2aaf60ebd4b838","language":"Python","public_boundary":"FastAPI route registration","focus":"request routing and dependency execution","verification":"pytest tests"},
+    {"id":"express","url":"https://github.com/expressjs/express","commit":"ae6dd37680e3a00618d6c8a3e522f0ee4eeba1a4","language":"JavaScript","public_boundary":"express() request handling","focus":"router matching and middleware dispatch","verification":"npm test"},
+    {"id":"nestjs","url":"https://github.com/nestjs/nest","commit":"41d9f37b320a4021da007fcbf2d9d578625f399c","language":"TypeScript","public_boundary":"controller route registration","focus":"HTTP routing to controller invocation","verification":"npm test"},
+    {"id":"rails","url":"https://github.com/rails/rails","commit":"3ac4702080445968f7308f9877a474a446a462ab","language":"Ruby","public_boundary":"Rails route recognition","focus":"controller action dispatch","verification":"bin/test"},
+    {"id":"laravel","url":"https://github.com/laravel/framework","commit":"ccd1bdee65b1c091d75986306401880d112f33b1","language":"PHP","public_boundary":"the HTTP kernel","focus":"router matching and controller dispatch","verification":"vendor/bin/phpunit"},
+    {"id":"spring-petclinic","url":"https://github.com/spring-projects/spring-petclinic","commit":"f182358d02e4a68e52bdbabf55ca7800288511e7","language":"Java","public_boundary":"an owner HTTP endpoint","focus":"owner controller and repository persistence","verification":"./mvnw test"},
+    {"id":"aspnetcore","url":"https://github.com/dotnet/aspnetcore","commit":"dfe3e58cc0f6e88d646bc2f78adf3220219a4165","language":"C#","public_boundary":"endpoint routing middleware","focus":"endpoint selection and request dispatch","verification":"./eng/build.sh -test"},
+    {"id":"gin","url":"https://github.com/gin-gonic/gin","commit":"34dac209ffb6ef85cc78c5d217bbb7ad001d68fd","language":"Go","public_boundary":"Engine.ServeHTTP","focus":"route lookup and handler-chain execution","verification":"go test ./..."},
+    {"id":"chi","url":"https://github.com/go-chi/chi","commit":"8b258c7bb28f97a5f2a856ff7ef962578fec9215","language":"Go","public_boundary":"Mux.ServeHTTP","focus":"route matching and handler dispatch","verification":"go test ./..."},
+    {"id":"vapor","url":"https://github.com/vapor/vapor","commit":"94441c84e8111ef372ff2d6bea750b662cd6b827","language":"Swift","public_boundary":"RoutesBuilder route registration","focus":"request routing to a responder","verification":"swift test"},
+    {"id":"shelf","url":"https://github.com/dart-lang/shelf","commit":"e9c742d10432bae93d8a72a8840c2e701a6e2134","language":"Dart","public_boundary":"a shelf Handler","focus":"middleware pipeline and response production","verification":"dart test"},
+    {"id":"vue-core","url":"https://github.com/vuejs/core","commit":"fa2885d8c48768d26f1666a01bd540ffe3b20f9b","language":"TypeScript","public_boundary":"createApp","focus":"component mounting and update scheduling","verification":"pnpm test"},
+    {"id":"svelte-kit","url":"https://github.com/sveltejs/kit","commit":"adc4c5be542ecf7da93ee8d0e90e9d13b952998b","language":"TypeScript","public_boundary":"the server request responder","focus":"route resolution and endpoint rendering","verification":"pnpm test"},
+    {"id":"astro","url":"https://github.com/withastro/astro","commit":"cf9ffc72258b23211eb07f4f38176756812b373d","language":"TypeScript","public_boundary":"an incoming server request","focus":"route matching and page rendering","verification":"pnpm test"},
+    {"id":"terraform","url":"https://github.com/hashicorp/terraform","commit":"5c8717d62e80b8382cbed292919171d0ffb58237","language":"Go","public_boundary":"the terraform plan command","focus":"plan graph construction and walking","verification":"go test ./..."},
+    {"id":"fmt","url":"https://github.com/fmtlib/fmt","commit":"7b4ef1c8145f21e126167f52a594909dde8c89fe","language":"C++","public_boundary":"fmt::format","focus":"format parsing and argument rendering","verification":"cmake --build build --target test"}
+  ],
+  "task_templates": [
+    {"id":"navigation","category":"navigation","prompt":"Locate the primary public boundary for {focus}, starting from {public_boundary}. Return the smallest set of exact source anchors needed to continue implementation work."},
+    {"id":"change-impact","category":"change-impact","prompt":"Assume the implementation behind {focus} changes without a public signature change. Identify the affected callers, public boundaries, and most relevant tests. Do not edit files."},
+    {"id":"flow","category":"flow","prompt":"Trace the deterministic runtime flow from {public_boundary} to {focus}. Return ordered exact anchors and label any uncertain cross-boundary hop."},
+    {"id":"repair","category":"repair","prompt":"The check `{verification}` reports a behavioral failure owned by {focus}. Locate the smallest likely repair boundary and the focused verification to run next. Do not edit files."},
+    {"id":"resume","category":"resume","prompt":"An earlier turn changed code around {focus} and stopped before `{verification}`. Resume by recovering the changed boundary, current verification state, and next action without repeating already delivered evidence."}
+  ]
+}

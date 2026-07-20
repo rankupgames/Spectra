@@ -95,7 +95,7 @@ The post-hook deterministic regression must preserve the 93.4% median reduction 
 
 ## v0.4 adaptive-context release gate
 
-The v0.4 release requires a holdout corpus of at least 20 polyglot repositories and 100 tasks spanning navigation, change impact, flow, repair, and resume. Holdout repositories must not influence selector rules. Each task runs baseline and Spectra arms with the same harness, model, task instructions, provider settings, and clean repository state.
+The v0.4 release uses [`v0.4-holdout.json`](v0.4-holdout.json): 20 public repositories pinned to exact commits across Rust, Python, JavaScript, TypeScript, Ruby, PHP, Java, C#, Go, Swift, Dart, and C++. Its five task templates—navigation, change impact, flow, repair, and resume—are instantiated once per repository for 100 tasks. Holdout repositories must not influence selector rules. Each task runs baseline and Spectra arms with the same harness, model, task instructions, provider settings, and clean repository state.
 
 Record provider input as separate schema, text, and image counts; record cached input as the provider-reported subset rather than adding it to the total. Also record output tokens, tool calls, latency, repeated context bytes, and final task success. The reviewed report format is defined by [`v0.4-report-schema.json`](v0.4-report-schema.json). A privacy review populates `forbidden_findings`; a release report must contain no source bodies, prompts, patches, terminal bodies, credentials, or raw session IDs in receipts or metrics.
 

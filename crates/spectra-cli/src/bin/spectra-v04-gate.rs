@@ -302,6 +302,28 @@ fn rate(part: usize, total: usize) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
+
+    #[test]
+    fn frozen_holdout_expands_to_twenty_repositories_and_one_hundred_tasks() {
+        let manifest: Value =
+            serde_json::from_str(include_str!("../../../../benchmarks/v0.4-holdout.json")).unwrap();
+        let repositories = manifest["repositories"].as_array().unwrap();
+        let templates = manifest["task_templates"].as_array().unwrap();
+        assert_eq!(repositories.len(), 20);
+        assert_eq!(templates.len(), 5);
+        assert_eq!(repositories.len() * templates.len(), 100);
+        assert_eq!(
+            repositories
+                .iter()
+                .filter_map(|repository| repository["commit"].as_str())
+                .filter(
+                    |commit| commit.len() == 40 && commit.chars().all(|ch| ch.is_ascii_hexdigit())
+                )
+                .count(),
+            20
+        );
+    }
 
     fn passing_report() -> Report {
         Report {
