@@ -270,7 +270,7 @@ fn with_lock<T>(
                 acquired = true;
                 break;
             }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(error) if is_lock_contention(&error) => {
                 let stale = fs::metadata(&path)
                     .and_then(|metadata| metadata.modified())
                     .and_then(|modified| modified.elapsed().map_err(std::io::Error::other))
@@ -293,6 +293,24 @@ fn with_lock<T>(
         (Ok(value), Ok(())) => Ok(value),
         (Err(error), _) => Err(error),
         (_, Err(error)) => Err(error.into()),
+    }
+}
+
+fn is_lock_contention(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::AlreadyExists {
+        return true;
+    }
+
+    // Windows can report a lock file being deleted by the previous owner as
+    // access denied, sharing violation, or lock violation. Retrying keeps an
+    // ordinary handoff from becoming a fail-open receipt write.
+    #[cfg(windows)]
+    {
+        matches!(error.raw_os_error(), Some(5 | 32 | 33))
+    }
+    #[cfg(not(windows))]
+    {
+        false
     }
 }
 
