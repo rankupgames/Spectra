@@ -9,6 +9,9 @@ struct Args {
     report: PathBuf,
     #[arg(long)]
     json: bool,
+    /// Accept a single model/harness for an explicitly labeled pilot report.
+    #[arg(long)]
+    pilot: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -71,7 +74,7 @@ struct Summary {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let report: Report = serde_json::from_slice(&fs::read(args.report)?)?;
-    let summary = evaluate(&report)?;
+    let summary = evaluate(&report, args.pilot)?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&summary)?);
     } else {
@@ -90,7 +93,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn evaluate(report: &Report) -> Result<Summary, Box<dyn std::error::Error>> {
+fn evaluate(report: &Report, pilot: bool) -> Result<Summary, Box<dyn std::error::Error>> {
     if report.schema_version != 1 {
         return Err(format!("unsupported report schema {}", report.schema_version).into());
     }
@@ -112,7 +115,7 @@ fn evaluate(report: &Report) -> Result<Summary, Box<dyn std::error::Error>> {
     if repositories.len() < 20 || report.tasks.len() < 100 {
         return Err("v0.4 requires at least 20 repositories and 100 tasks".into());
     }
-    if models.len() < 2 || harnesses.len() < 3 {
+    if !pilot && (models.len() < 2 || harnesses.len() < 3) {
         return Err("v0.4 requires at least two models across three harnesses".into());
     }
     let environment_ids = report
@@ -389,7 +392,7 @@ mod tests {
 
     #[test]
     fn accepts_a_report_that_meets_every_release_gate() {
-        let summary = evaluate(&passing_report()).unwrap();
+        let summary = evaluate(&passing_report(), false).unwrap();
         assert_eq!(summary.repositories, 20);
         assert_eq!(summary.tasks, 100);
         assert_eq!(summary.median_input_reduction, 0.5);
@@ -400,7 +403,7 @@ mod tests {
         let mut report = passing_report();
         report.forbidden_findings.push("raw session id".into());
         assert!(
-            evaluate(&report)
+            evaluate(&report, false)
                 .unwrap_err()
                 .to_string()
                 .contains("privacy")
@@ -410,6 +413,17 @@ mod tests {
         for task in &mut report.tasks[1..] {
             task.spectra.input_tokens = 900;
         }
-        assert!(evaluate(&report).is_err());
+        assert!(evaluate(&report, false).is_err());
+    }
+
+    #[test]
+    fn pilot_mode_allows_one_grok_environment_without_weakening_release_mode() {
+        let mut report = passing_report();
+        report.environments.truncate(1);
+        for task in &mut report.tasks {
+            task.environment_id = "codex-frontier".into();
+        }
+        assert!(evaluate(&report, false).is_err());
+        assert!(evaluate(&report, true).is_ok());
     }
 }

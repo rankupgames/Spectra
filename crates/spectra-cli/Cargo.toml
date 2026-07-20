@@ -54,3 +54,7 @@ path = "src/bin/spectra-adapter-eval.rs"
 [[bin]]
 name = "spectra-v04-gate"
 path = "src/bin/spectra-v04-gate.rs"
+
+[[bin]]
+name = "spectra-v04-grok-eval"
+path = "src/bin/spectra-v04-grok-eval.rs"
