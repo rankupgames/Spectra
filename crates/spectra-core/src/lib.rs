@@ -3,6 +3,7 @@
 use std::path::Path;
 
 mod adapters;
+pub mod context;
 mod error;
 pub mod graph;
 mod index;
@@ -10,6 +11,7 @@ pub mod ledger;
 mod select;
 
 pub use adapters::{SupportedLanguage, is_supported_path, supported_languages};
+pub use context::{EvidenceRecord, PackedEvidence, estimate_tokens, pack_evidence};
 pub use error::{Error, Result};
 pub use index::{CodeIndex, INDEX_VERSION, IndexReport, SourceSpan};
 pub use ledger::{

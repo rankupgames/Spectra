@@ -115,18 +115,8 @@ pub fn select_subgraph(index: &CodeIndex, query: &str, options: SelectionOptions
                 // become direct anchors. They otherwise crowd out actual symbols
                 // when a repository or crate name appears in the question.
                 if group_score >= 35 {
-                    let context_bonus =
-                        contextual_path_bonus(&term_groups[group_index], &label, &path);
-                    let architecture_bonus =
-                        architecture_path_bonus(&term_groups[group_index], &flattened_terms, &path);
                     let file_affinity = symbol_file_affinity_bonus(&label, &path);
-                    let api_boundary_bonus = if matches!(kind, "function" | "method")
-                        && (path.ends_with("/lib.rs") || path.ends_with("/mod.rs"))
-                    {
-                        100
-                    } else {
-                        0
-                    };
+                    let api_boundary_bonus = public_boundary_bonus(kind, &path);
                     let compound_label_bonus = label_words
                         .iter()
                         .filter(|word| term_groups[group_index].contains(word))
@@ -141,8 +131,6 @@ pub fn select_subgraph(index: &CodeIndex, query: &str, options: SelectionOptions
                     scored_by_group[group_index].push((
                         Reverse(
                             group_score
-                                + context_bonus
-                                + architecture_bonus
                                 + file_affinity
                                 + api_boundary_bonus
                                 + compound_label_bonus
@@ -361,131 +349,22 @@ fn add_relationship_connectors(
     );
 }
 
-fn contextual_path_bonus(group: &[String], label: &str, path: &str) -> i32 {
-    let cli_concept = group
-        .iter()
-        .any(|term| matches!(term.as_str(), "arg" | "args" | "cli"));
-    let config_concept = group
-        .iter()
-        .any(|term| matches!(term.as_str(), "config" | "configure"));
-    let transition_concept = group.iter().any(|term| term == "from_low_args");
-    if !(cli_concept || config_concept || transition_concept) {
+fn public_boundary_bonus(kind: &str, path: &str) -> i32 {
+    if !matches!(kind, "function" | "method" | "route" | "component") {
         return 0;
     }
-    let mut bonus = 0;
-    if path.contains("/flags/") || path.starts_with("flags/") {
-        bonus += if cli_concept { 120 } else { 80 };
-    } else if path.contains("/cli/") || path.starts_with("cli/") {
-        bonus += if cli_concept { 50 } else { 20 };
+    let stem = path
+        .rsplit('/')
+        .next()
+        .and_then(|file| file.split('.').next())
+        .unwrap_or("");
+    if matches!(stem, "lib" | "mod" | "index" | "api" | "router" | "routes") {
+        100
+    } else if path.contains("/api/") || path.contains("/routes/") {
+        60
+    } else {
+        0
     }
-    if cli_concept && label.contains("parse") {
-        bonus += 70;
-    }
-    if transition_concept && label.contains("parse") {
-        bonus += 140;
-    }
-    bonus
-}
-
-fn architecture_path_bonus(group: &[String], terms: &BTreeSet<&str>, path: &str) -> i32 {
-    let scheduler_context = terms
-        .iter()
-        .any(|term| matches!(*term, "schedule" | "scheduler" | "worker"));
-    let scheduler_group = group.iter().any(|term| {
-        matches!(
-            term.as_str(),
-            "execute" | "poll" | "run" | "schedule" | "scheduler" | "worker"
-        )
-    });
-    let lsp_dispatch_context = terms.iter().any(|term| *term == "lsp")
-        && terms
-            .iter()
-            .any(|term| matches!(*term, "dispatch" | "dispatcher" | "handler"));
-    let timer_context = terms
-        .iter()
-        .any(|term| matches!(*term, "sleep" | "timer" | "deadline"))
-        && terms.iter().any(|term| *term == "driver");
-    let timer_group = group.iter().any(|term| {
-        matches!(
-            term.as_str(),
-            "deadline"
-                | "driver"
-                | "elapsed"
-                | "expiration"
-                | "poll"
-                | "ready"
-                | "time"
-                | "timer"
-                | "wake"
-        )
-    });
-    let timer_entry_group = group.iter().any(|term| {
-        matches!(
-            term.as_str(),
-            "deadline" | "elapsed" | "expiration" | "poll" | "ready" | "wake"
-        )
-    });
-    let sleep_group = group.iter().any(|term| term == "sleep");
-    let completion_context = terms.iter().any(|term| *term == "completion")
-        && terms
-            .iter()
-            .any(|term| matches!(*term, "analysis" | "context" | "collect"));
-    let completion_group = group.iter().any(|term| {
-        matches!(
-            term.as_str(),
-            "analysis" | "collect" | "completion" | "context" | "item" | "items"
-        )
-    });
-    let search_pipeline_context = terms.iter().any(|term| *term == "search")
-        && terms
-            .iter()
-            .any(|term| matches!(*term, "haystack" | "walk" | "worker"));
-    let search_pipeline_group = group.iter().any(|term| {
-        matches!(
-            term.as_str(),
-            "execute" | "haystack" | "path" | "search" | "walk" | "worker"
-        )
-    });
-    let mut bonus = 0;
-    if scheduler_context && scheduler_group {
-        if path.contains("/runtime/") {
-            bonus += 100;
-        }
-        if path.contains("/scheduler/") {
-            bonus += 50;
-        }
-    }
-    if lsp_dispatch_context && path.contains("/handlers/") {
-        bonus += 80;
-    }
-    if timer_context && timer_group && path.contains("/runtime/time/") {
-        bonus += 120;
-    }
-    if timer_context && timer_entry_group && path.ends_with("/runtime/time/entry.rs") {
-        bonus += 180;
-    }
-    if timer_context && sleep_group && path.contains("/time/") {
-        bonus += 80;
-    }
-    if completion_context && completion_group {
-        if path.contains("/ide-completion/") {
-            bonus += 120;
-        } else if path.contains("/ide/src/") {
-            bonus += 80;
-        }
-    }
-    if search_pipeline_context && search_pipeline_group {
-        if path.ends_with("/core/search.rs") {
-            bonus += 220;
-        } else if path.ends_with("/core/main.rs") {
-            bonus += 180;
-        } else if path.ends_with("/core/haystack.rs") {
-            bonus += 120;
-        } else if path.ends_with("/ignore/src/walk.rs") {
-            bonus += 80;
-        }
-    }
-    bonus
 }
 
 fn symbol_file_affinity_bonus(label: &str, path: &str) -> i32 {
@@ -580,23 +459,6 @@ fn terms(query: &str) -> Vec<Vec<String>> {
         .replace("command line", "cli")
         .replace("high-level", "")
         .replace("high level", "");
-    let cli_to_config = (normalized.contains("cli") || normalized.contains("argument"))
-        && (normalized.contains("config") || normalized.contains("configure"));
-    if cli_to_config {
-        groups.push(
-            [
-                "convert",
-                "conversion",
-                "from_low_args",
-                "hiargs",
-                "lowargs",
-                "parse",
-            ]
-            .into_iter()
-            .map(str::to_owned)
-            .collect(),
-        );
-    }
     for raw in normalized.split(|ch: char| !ch.is_alphanumeric() && ch != '_') {
         let value = raw.trim_matches('_').to_ascii_lowercase();
         if value.len() > 1 && !is_stop_word(&value) {
@@ -643,16 +505,10 @@ fn term_variants(value: &str) -> Vec<String> {
         "command" => &["cli"],
         "configuration" | "configured" => &["config", "configure"],
         "directory" | "directories" => &["dir"],
-        "deadline" => &["elapsed", "expiration"],
         "dispatch" | "dispatched" => &["dispatcher", "route"],
-        "driver" => &["park", "process"],
-        "poll" | "polled" => &["execute", "run"],
-        "ready" => &["elapsed", "poll", "wake"],
-        "readiness" => &["ready"],
         "register" | "registered" => &["registration"],
         "scheduler" => &["schedule"],
         "spawn" | "spawned" => &["spawner"],
-        "timer" => &["time"],
         _ => &[],
     };
     variants.extend(aliases.iter().map(|alias| (*alias).to_owned()));
@@ -784,7 +640,7 @@ mod tests {
         assert!(term_variants("arguments").contains(&"args".to_owned()));
         assert!(term_variants("parsed").contains(&"parse".to_owned()));
         assert!(term_variants("dispatch").contains(&"dispatcher".to_owned()));
-        assert!(term_variants("polled").contains(&"run".to_owned()));
+        assert!(term_variants("polled").contains(&"poll".to_owned()));
     }
 
     #[test]
@@ -844,6 +700,26 @@ mod tests {
                 |group| group.contains(&"cli".to_owned()) && group.contains(&"args".to_owned())
             )
         );
+    }
+
+    #[test]
+    fn production_selector_contains_no_frozen_corpus_rules() {
+        let source = include_str!("select.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or_default();
+        for forbidden in [
+            ["from", "low", "args"].join("_"),
+            ["hi", "args"].join(""),
+            ["hay", "stack"].join(""),
+            ["ide", "completion"].join("-"),
+            ["runtime", "time", "entry.rs"].join("/"),
+        ] {
+            assert!(
+                !source.contains(&forbidden),
+                "frozen selector rule: {forbidden}"
+            );
+        }
     }
 
     #[test]
