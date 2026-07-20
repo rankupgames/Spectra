@@ -41,6 +41,10 @@ struct Args {
     repository: Vec<String>,
     #[arg(long)]
     category: Vec<String>,
+    /// Re-execute cached function calls locally to reconstruct tool traces.
+    /// Makes no provider requests when arm summaries already exist.
+    #[arg(long)]
+    replay_tool_traces: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -276,6 +280,9 @@ fn run_arm(
     fs::create_dir_all(&arm_dir)?;
     let summary_path = arm_dir.join("summary.json");
     if summary_path.exists() {
+        if args.replay_tool_traces {
+            replay_tool_traces(args, task, repository, arm, &arm_dir)?;
+        }
         return Ok(serde_json::from_slice(&fs::read(summary_path)?)?);
     }
     let tools = tool_schemas(arm);
@@ -286,6 +293,7 @@ fn run_arm(
         let output = spectra_context(args, repository, task, &task.prompt, &task.category, "full")?;
         account_output(&mut delivery, &output);
         account_packet(&mut delivery, &output);
+        fs::write(arm_dir.join("initial-context.txt"), &output)?;
         Some(output)
     } else {
         None
@@ -317,7 +325,7 @@ fn run_arm(
             result.answer = extract_answer(&response);
             break;
         }
-        for call in calls {
+        for (call_index, call) in calls.into_iter().enumerate() {
             let name = call["name"].as_str().unwrap_or_default();
             let arguments: Value = serde_json::from_str(call["arguments"].as_str().unwrap_or("{}"))
                 .unwrap_or_else(|_| json!({}));
@@ -328,6 +336,10 @@ fn run_arm(
                 account_packet(&mut delivery, &output);
             }
             account_output(&mut delivery, &output);
+            write_json(
+                &arm_dir.join(format!("tool-{turn}-{call_index}.json")),
+                &json!({"name":name,"arguments":arguments,"output":&output}),
+            )?;
             history.push(json!({
                 "type":"function_call_output",
                 "call_id":call["call_id"].as_str().unwrap_or_default(),
@@ -342,6 +354,43 @@ fn run_arm(
     result.solved = deterministic_success(task, &result);
     write_json(&summary_path, &result)?;
     Ok(result)
+}
+
+fn replay_tool_traces(
+    args: &Args,
+    task: &ExpandedTask,
+    repository: &Path,
+    arm: ArmKind,
+    arm_dir: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if arm == ArmKind::Spectra {
+        let initial =
+            spectra_context(args, repository, task, &task.prompt, &task.category, "full")?;
+        fs::write(arm_dir.join("initial-context.txt"), initial)?;
+    }
+    for turn in 0..args.max_turns {
+        let raw_path = arm_dir.join(format!("turn-{turn}.json"));
+        if !raw_path.exists() {
+            break;
+        }
+        let envelope: Value = serde_json::from_slice(&fs::read(raw_path)?)?;
+        let calls = envelope["response"]["output"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|item| item["type"] == "function_call");
+        for (call_index, call) in calls.enumerate() {
+            let name = call["name"].as_str().unwrap_or_default();
+            let arguments: Value = serde_json::from_str(call["arguments"].as_str().unwrap_or("{}"))
+                .unwrap_or_else(|_| json!({}));
+            let output = execute_tool(args, repository, task, arm, name, &arguments)?;
+            write_json(
+                &arm_dir.join(format!("tool-{turn}-{call_index}.json")),
+                &json!({"name":name,"arguments":arguments,"output":&output}),
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn tool_schemas(arm: ArmKind) -> Value {

@@ -9,7 +9,7 @@
     "schema_version": { "const": 1 },
     "environments": {
       "type": "array",
-      "minItems": 3,
+      "minItems": 1,
       "items": {
         "type": "object",
         "additionalProperties": false,
