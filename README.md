@@ -1,25 +1,26 @@
 # Spectra
 
-**A smaller, more useful memory for local AI coding agents.**
+**An adaptive context runtime for local AI coding agents.**
 
 [![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-CE412B?logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![Version: 0.3.0](https://img.shields.io/badge/Version-0.3.0-38BDF8.svg)](https://github.com/rankupgames/Spectra/releases/tag/v0.3.0)
+[![Version: 0.4.0](https://img.shields.io/badge/Version-0.4.0-38BDF8.svg)](https://github.com/rankupgames/Spectra/releases/tag/v0.4.0)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22C55E.svg)](LICENSE)
 [![Status: Prototype](https://img.shields.io/badge/Status-Prototype-F59E0B.svg)](#project-status)
 
 AI coding agents are good at working with code. They are less good at remembering a whole codebase without repeatedly loading file trees, source dumps, terminal logs, and old conversation into context.
 
-Spectra is an experiment in fixing that. It gives an agent two things: a visual map of the codebase and a small, durable record of what has already happened. The goal is simple: spend fewer tokens rediscovering context, and more of them doing the actual work.
+Spectra is an experiment in fixing that. Its adaptive context runtime selects the smallest useful packet for the next decision, remembers which evidence an exact agent session has already received, and creates a visual map only when one is requested. The goal is simple: spend fewer tokens rediscovering context, and more of them doing the actual work.
 
 ```text
-Polyglot repository ──code adapters──▶ topology graph ──▶ PNG map + exact anchors
-Agent lifecycle ──adapter hooks──▶ immutable ledger ──▶ bounded state context
+Query + lifecycle ──▶ adaptive selector ──▶ budgeted evidence packet
+Polyglot repository ──code adapters──▶ topology graph ──▶ exact anchors + optional PNG
+Agent lifecycle ──adapter hooks──▶ immutable ledger ──▶ bounded continuity
 ```
 
 Instead of dumping source up front, Spectra lets the model see the shape of the system, choose an exact `path:start-end` anchor, and read code once it knows what it is looking for.
 
 > [!IMPORTANT]
-> Spectra is an early prototype. The v0.3 registry retains the complete CodeGraph v1.3.0 language and extension surface with 39 adapters. The harness-neutral Ledger is verified for Codex, Claude Code, and Gemini CLI; Cursor support is intentionally partial because it can reinject continuity only at session start. See [Project status](#project-status) before relying on it in production.
+> Spectra is an early prototype. The v0.4 runtime retains the complete CodeGraph v1.3.0 language and extension surface with 39 adapters. The harness-neutral Ledger is verified for Codex, Claude Code, and Gemini CLI; Cursor support is intentionally partial because it can reinject continuity only at session start. See [Project status](#project-status) before relying on it in production.
 
 The [agent support contract](docs/agent-support.md) tracks topology and Ledger support separately so an MCP integration is never mistaken for lifecycle coverage.
 
@@ -49,11 +50,8 @@ These numbers come from nine frozen prompts across pinned ripgrep, Tokio, and ru
 
 ## Quickstart
 
-Spectra does not have prebuilt binaries yet, but Cargo can install the tagged v0.3.0 release directly from GitHub:
-
 ### Requirements
 
-- Rust 1.88 or newer
 - At least one supported local agent: Claude Code, Cursor, Codex, OpenCode, Hermes Agent, Gemini CLI, Antigravity, or Kiro
 - A repository containing at least one supported source language
 
@@ -61,9 +59,28 @@ Any MCP client can also run `spectra serve --mcp` manually.
 
 ### 1. Install Spectra
 
+macOS and Linux:
+
 ```sh
-cargo install --git https://github.com/rankupgames/Spectra.git --tag v0.3.0 --bin spectra --locked
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/rankupgames/Spectra/v0.4.0/install.sh | sh
 ```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/rankupgames/Spectra/v0.4.0/install.ps1 | iex
+```
+
+Package-manager and source-install alternatives:
+
+```sh
+brew install rankupgames/tap/spectra
+scoop bucket add rankupgames https://github.com/rankupgames/scoop-bucket
+scoop install rankupgames/spectra
+cargo install --git https://github.com/rankupgames/Spectra.git --tag v0.4.0 --bin spectra --locked
+```
+
+Cargo installation requires Rust 1.88 or newer. Every release archive is covered by the published `SHA256SUMS`, Sigstore bundle, and build provenance; both direct installers verify the archive checksum before installing it.
 
 ### 2. Connect your agents
 
@@ -97,10 +114,16 @@ After that, there is nothing to babysit. The long-lived MCP process watches ever
 Ask your agent an architecture or navigation question, for example:
 
 ```text
-Use Spectra to map how request routing reaches persistence.
+Use Spectra to find how request routing reaches persistence.
 ```
 
-Or render a map directly:
+Or inspect the adaptive packet directly:
+
+```sh
+spectra context "how does request routing reach persistence" --path /path/to/project
+```
+
+Render a map only when the visual topology is useful:
 
 ```sh
 spectra map "how does request routing reach persistence" --path /path/to/project
@@ -125,6 +148,8 @@ Normal use creates a project-local `.spectra/` directory containing generated st
 .spectra/
 ├── index-v4.json          incremental polyglot code index
 ├── ledger-v1.jsonl        append-only context ledger
+├── context-receipts-v1.json hashed per-session evidence receipts
+├── metrics-v1.json        local aggregate efficiency counters
 └── artifacts/             generated PNG and SVG maps
 ```
 
@@ -155,7 +180,11 @@ spectra sync [PATH] [--quiet]
 spectra autosync install [PATH]
 spectra autosync status [PATH]
 spectra autosync remove [PATH]
+spectra context <QUERY> [--path PATH] [--token-budget 128..2000] [--intent auto|resume|locate|flow|change|inspect]
+                [--representation text|map] [--delivery delta|full]
+                [--source-harness HARNESS --session-id ID] [--cursor CURSOR]
 spectra map <QUERY> [--path PATH] [--max-nodes 1..96] [--out DIR]
+spectra stats [--path PATH] [--json] [--reset]
 spectra serve --mcp
 spectra lifecycle ingest
 spectra hook [--agent codex|claude|gemini|cursor]
@@ -171,20 +200,24 @@ The installer is idempotent and ownership-aware: it updates stale Spectra regist
 
 ## MCP interface
 
-Spectra keeps the default MCP surface to two complementary tools:
+Spectra advertises one tool by default:
+
+```text
+spectra_context(
+  query, projectPath?, tokenBudget?, intent?, representation?,
+  delivery?, source?, cursor?
+)
+```
+
+`spectra_context` routes `auto`, `resume`, `locate`, `flow`, `change`, and `inspect` intents through the existing Ledger and graph engines. It returns atomic continuity, anchor, relation, change, test, boundary, source-window, and next-action evidence as compact Context Packet v1 text. The default budget is 600 estimated tokens. Continuation cursors bind the query, intent, and index version, and fail as `cursor_stale` instead of mixing changed results.
+
+Text is the default. `representation=map` appends the existing PNG content block and identifies its cost as provider-controlled; the text packet remains budgeted independently. With an exact `{harness, sessionId}` source, `delivery=delta` suppresses evidence already delivered to that session. Without an exact source, Spectra safely returns a full packet and performs no deduplication. `delivery=full` resets the session baseline.
+
+All twelve v0.3 tools remain available without rebuilding. Set `SPECTRA_MCP_TOOLS=all`, or provide a comma-separated short-name allowlist such as `context,brief,map,changes,path,explore`. Existing allowlists and snake-case aliases remain valid. The legacy tools are:
 
 ```text
 spectra_brief(query, projectPath?, tokenBudget?, detail?, source?)
 spectra_map(query, projectPath?, maxNodes?)
-```
-
-Use `spectra_brief` as the first call when starting or resuming work. It combines bounded project-wide Ledger facts, synchronization health, ranked graph anchors, affected boundaries, and suggested next reads. Session state is included only when an exact `{harness, sessionId}` source is supplied. Compact mode defaults to 600 estimated tokens; `detail=source` substitutes bounded, line-numbered source windows and never creates an image or map artifact.
-
-Use `spectra_map` when a visual architecture view is useful. Its response contains an `image/png` content block followed by compact anchor metadata and never includes source bodies. Legacy snake-case parameter spellings remain accepted by every tool.
-
-Change impact, typed paths, and the full CodeGraph-parity query pack are available without rebuilding. Set `SPECTRA_MCP_TOOLS=all`, or provide a comma-separated short-name allowlist such as `brief,map,changes,path,explore`. The available opt-in tools are:
-
-```text
 spectra_changes(projectPath?, base?, paths?, depth?, includeTests?, tokenBudget?)
 spectra_path(from, to, fromFile?, toFile?, mode?, maxHops?, projectPath?)
 spectra_explore(query, maxFiles?, projectPath?, tokenBudget?)
@@ -242,6 +275,8 @@ Spectra should not become another transcript database. It deliberately keeps les
 
 - Source bodies are excluded from topology responses.
 - Prompts, assistant messages, patch bodies, and terminal output bodies are not written to the Ledger.
+- Context receipts store only a salted session-key digest, evidence hashes, sequence metadata, and access metadata; corruption and write failure fail open to a full response.
+- Efficiency metrics are local aggregate counters and are never networked. Set `SPECTRA_METRICS=off` to disable collection, inspect them with `spectra stats`, or explicitly clear them with `spectra stats --reset`.
 - Credential-shaped values are redacted before persistence.
 - Hook retries use correlation IDs so immutable events are not duplicated.
 - Index writers use an ownership-checked heartbeat lock across MCP, CLI, and Git-hook processes.
@@ -255,9 +290,10 @@ Provider hooks remain fail-open and record only their documented lifecycle surfa
 
 ```sh
 cargo fmt --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo build --release --workspace
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+cargo build --release --workspace --locked
+cargo run -p spectra-context --bin spectra-v04-gate -- benchmarks/results/reviewed-v0.4.json
 ```
 
 The benchmark protocol, frozen prompts, raw evaluation data, and replay fixtures live under [`benchmarks/`](benchmarks/README.md).
@@ -270,24 +306,28 @@ Implemented:
 - CodeGraph-parity server framework routes plus React/Next, SwiftUI, React Native, Expo Module, and Fabric client/native bridges
 - embedded JavaScript/TypeScript bridges, component rendering and event bindings, and conventional SvelteKit, Nuxt, and Astro page routes
 - query-focused deterministic PNG and SVG rendering
-- bounded MCP image and anchor responses
-- the complete CodeGraph v1.3.0 MCP query capability set, with a one-tool default and allowlist-enabled explore/search/traversal/node/files/status tools
+- budgeted Context Packet v1 responses with deterministic intent routing, atomic evidence packing, bounded source windows, stale-safe continuation cursors, and explicit-only maps
+- session-durable evidence deduplication with hashed receipts, bounded LRU storage, concurrent writers, corruption recovery, and fail-open delivery
+- local privacy-safe efficiency metrics with opt-out, inspection, and explicit reset
+- the complete CodeGraph v1.3.0 MCP query capability set, with `spectra_context` as the one-tool default and all twelve v0.3 tools behind compatible allowlists
 - automatic MCP installation for Claude Code, Cursor, Codex, OpenCode, Hermes Agent, Gemini CLI, Antigravity, and Kiro
 - automatic lifecycle-hook installation for Codex, Claude Code, Gemini CLI, and Cursor
 - append-only, per-session State Machine Ledger with replay, recovery, redaction, concurrency control, cross-harness project facts, and bounded projection
 - stable harness-neutral `spectra lifecycle ingest` JSON v1 protocol
 - deterministic, provider-backed, and recorded-hook regression suites
 - pinned real-repository parity gates covering framework routes and multimodal topology quality
+- cross-platform release archives, checksums, Sigstore signing/provenance, checksum-verifying installers, and generated Homebrew/Scoop manifests
+- a reviewed-report gate enforcing the v0.4 polyglot efficiency, solve-rate, repetition, call-count, budget, and privacy thresholds
 
 Not yet implemented:
 
 - per-prompt Cursor context reinjection (the host currently exposes reliable reinjection only at session start)
 - complete unified-shell interception
-- packaged release binaries and automatic updater
+- automatic updater
 - Tauri observability UI
 - public graph-extension SDK
 
-The v0.3 release hardens that CodeGraph-parity topology around a harness-neutral continuity protocol, verified provider adapters, project-local setup, and a richer terminal workflow. Packaged installers that do not require a Rust toolchain remain future work.
+The v0.4 release turns that topology and continuity foundation into an adaptive, text-first context runtime. Existing index-v4, ledger-v1, lifecycle-v1, MCP commands, hook installations, and legacy tool response contracts remain compatible.
 
 ## Contributing
 

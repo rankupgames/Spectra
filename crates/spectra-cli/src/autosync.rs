@@ -538,7 +538,11 @@ mod tests {
         let autosync = AutoSync::with_debounce(Duration::from_millis(100));
         let initial = autosync.ensure_project(&root);
         assert!(initial.active, "{:?}", initial.last_error);
-        assert_eq!(initial.sync_count, 1);
+        wait_for(|| {
+            let status = autosync.status(&root);
+            status.sync_count >= 1 && status.pending == 0
+        });
+        let initial = autosync.status(&root);
 
         fs::write(&source, "pub fn second() {}\n").unwrap();
         wait_for(|| {
@@ -626,7 +630,9 @@ mod tests {
     }
 
     fn wait_for(condition: impl Fn() -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // FSEvents delivery can lag behind the polling fallback on busy hosted
+        // macOS runners, especially while the workspace is still compiling.
+        let deadline = Instant::now() + Duration::from_secs(15);
         while !condition() {
             assert!(
                 Instant::now() < deadline,

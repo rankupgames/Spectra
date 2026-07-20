@@ -81,6 +81,86 @@ fn init_and_map_complete_end_to_end() {
 }
 
 #[test]
+fn adaptive_context_cli_deduplicates_tracks_metrics_and_maps_only_explicitly() {
+    let root = fixture();
+    let binary = env!("CARGO_BIN_EXE_spectra");
+    let run_context = |representation: &str| {
+        Command::new(binary)
+            .args([
+                "context",
+                "How does entry reach worker?",
+                "--path",
+                root.to_str().unwrap(),
+                "--token-budget",
+                "256",
+                "--source-harness",
+                "custom",
+                "--session-id",
+                "private-session-id",
+                "--representation",
+                representation,
+            ])
+            .output()
+            .unwrap()
+    };
+    let first = run_context("text");
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first = String::from_utf8(first.stdout).unwrap();
+    assert!(first.starts_with("C1 id=p"));
+    assert!(first.contains("intent=flow"));
+    assert!(first.contains("image_cost=none"));
+    assert!(!root.join(".spectra/artifacts").exists());
+
+    let duplicate = run_context("text");
+    assert!(duplicate.status.success());
+    assert!(
+        String::from_utf8(duplicate.stdout)
+            .unwrap()
+            .contains("unchanged sequence=")
+    );
+    let receipts = fs::read_to_string(root.join(".spectra/context-receipts-v1.json")).unwrap();
+    assert!(!receipts.contains("private-session-id"));
+    assert!(!receipts.contains("pub fn entry"));
+
+    let mapped = run_context("map");
+    assert!(
+        mapped.status.success(),
+        "{}",
+        String::from_utf8_lossy(&mapped.stderr)
+    );
+    let mapped = String::from_utf8(mapped.stdout).unwrap();
+    assert!(mapped.contains("image_cost=provider"));
+    assert!(mapped.contains("PNG "));
+
+    let stats = Command::new(binary)
+        .args(["stats", "--path", root.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    let stats: serde_json::Value = serde_json::from_slice(&stats.stdout).unwrap();
+    assert_eq!(stats["calls"], 3);
+    assert!(stats["duplicate_evidence_avoided"].as_u64().unwrap() > 0);
+    assert_eq!(stats["maps_requested"], 1);
+
+    let disabled = Command::new(binary)
+        .env("SPECTRA_METRICS", "off")
+        .args(["context", "find entry", "--path", root.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(disabled.status.success());
+    let stats = Command::new(binary)
+        .args(["stats", "--path", root.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    let stats: serde_json::Value = serde_json::from_slice(&stats.stdout).unwrap();
+    assert_eq!(stats["calls"], 3);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn mcp_handshake_does_not_index_before_the_first_tool_call() {
     let root = fixture();
     let mut child = Command::new(env!("CARGO_BIN_EXE_spectra"))

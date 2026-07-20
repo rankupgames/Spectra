@@ -41,7 +41,7 @@ Raw event-history exposure is intentionally not part of the agent interface.
 
 ## Automatic operation
 
-The Ledger is lazily created through normal Spectra use. `spectra brief`, `spectra map`, and their MCP equivalents synchronize the repository before selection and reuse one opened index snapshot for the complete response. Brief reads project-wide Ledger facts without borrowing another harness session's state; callers must supply exact source metadata to receive session state. Users do not need an initialization command, daemon, or manual synchronization step.
+The Ledger is lazily created through normal Spectra use. `spectra context`, `spectra brief`, `spectra map`, and their MCP equivalents synchronize the repository before selection and reuse one opened index snapshot for the complete response. Context and brief read project-wide Ledger facts without borrowing another harness session's state; callers must supply exact source metadata to receive session state. Context delivery receipts are mutable runtime state stored separately from this immutable Ledger. Users do not need an initialization command, daemon, or manual synchronization step.
 
 Verified provider adapters translate documented lifecycle events into the same Ledger facts:
 

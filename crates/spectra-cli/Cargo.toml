@@ -27,8 +27,8 @@ rmcp.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-spectra-core = { package = "spectra-context-core", version = "0.3.0", path = "../spectra-core" }
-spectra-render = { package = "spectra-context-render", version = "0.3.0", path = "../spectra-render" }
+spectra-core = { package = "spectra-context-core", version = "0.4.0", path = "../spectra-core" }
+spectra-render = { package = "spectra-context-render", version = "0.4.0", path = "../spectra-render" }
 tokio.workspace = true
 
 [[bin]]
@@ -50,3 +50,11 @@ path = "src/bin/spectra-ledger-grok-eval.rs"
 [[bin]]
 name = "spectra-adapter-eval"
 path = "src/bin/spectra-adapter-eval.rs"
+
+[[bin]]
+name = "spectra-v04-gate"
+path = "src/bin/spectra-v04-gate.rs"
+
+[[bin]]
+name = "spectra-v04-grok-eval"
+path = "src/bin/spectra-v04-grok-eval.rs"
