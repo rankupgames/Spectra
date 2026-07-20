@@ -290,13 +290,22 @@ pub(crate) fn context_packet(
         );
     }
 
+    let envelope_reserve = packet_envelope_reserve(
+        budget,
+        intent,
+        view.index.version,
+        options.map_requested,
+        &query_hash,
+        records.len(),
+    );
+
     let delivery = context_state::deliver(
         &view.root,
         records,
         context_state::DeliveryRequest {
             source: options.source.as_ref(),
             requested: options.delivery,
-            token_budget: budget.saturating_sub(64),
+            token_budget: budget.saturating_sub(envelope_reserve).max(1),
             offset: cursor.offset,
             index_version: view.index.version,
             ledger_sequence: sequence,
@@ -336,25 +345,26 @@ pub(crate) fn context_packet(
             .map(|cursor| format!(" next={cursor}"))
             .unwrap_or_default()
     ));
-    let provisional = lines.join("\n");
-    let used = estimate_tokens(&provisional);
-    lines[0] = format!(
-        "C1 id=p{packet_id} intent={} index=v{} budget={budget} used≈{used} delivery={} image_cost={}",
-        intent.as_str(),
-        view.index.version,
-        delivery.effective_delivery.as_str(),
-        if options.map_requested {
-            "provider"
-        } else {
-            "none"
-        }
-    );
-    let mut text = lines.join("\n");
-    let mut estimated_tokens = estimate_tokens(&text);
-    if estimated_tokens != used {
-        lines[0] = lines[0].replace(&format!("used≈{used}"), &format!("used≈{estimated_tokens}"));
+    let mut estimated_tokens = estimate_tokens(&lines.join("\n"));
+    let mut text = String::new();
+    for _ in 0..4 {
+        lines[0] = format!(
+            "C1 id=p{packet_id} intent={} index=v{} budget={budget} used≈{estimated_tokens} delivery={} image_cost={}",
+            intent.as_str(),
+            view.index.version,
+            delivery.effective_delivery.as_str(),
+            if options.map_requested {
+                "provider"
+            } else {
+                "none"
+            }
+        );
         text = lines.join("\n");
-        estimated_tokens = estimate_tokens(&text);
+        let rendered_estimate = estimate_tokens(&text);
+        if rendered_estimate == estimated_tokens {
+            break;
+        }
+        estimated_tokens = rendered_estimate;
     }
     context_state::record_metrics(
         &view.root,
@@ -369,6 +379,35 @@ pub(crate) fn context_packet(
         },
     );
     Ok(ContextPacket { text })
+}
+
+fn packet_envelope_reserve(
+    budget: usize,
+    intent: ContextIntent,
+    index_version: u32,
+    map_requested: bool,
+    query_hash: &str,
+    evidence_count: usize,
+) -> usize {
+    let cursor = encode_cursor(&ContextCursor {
+        query_hash: query_hash.to_owned(),
+        index_version,
+        intent: intent.as_str().into(),
+        offset: evidence_count,
+    });
+    let envelope = format!(
+        "C1 id=p000000000000 intent={} index=v{} budget={} used≈{} delivery=delta image_cost={}\nomitted={} next={}",
+        intent.as_str(),
+        index_version,
+        budget,
+        budget,
+        if map_requested { "provider" } else { "none" },
+        evidence_count,
+        cursor,
+    );
+    // Include slack for the two separators around evidence and digit-boundary
+    // changes when the final packet estimate is written into the header.
+    estimate_tokens(&envelope).saturating_add(2)
 }
 
 fn classify_intent(query: &str) -> ContextIntent {
@@ -2260,6 +2299,56 @@ mod tests {
         .unwrap();
         assert!(full.text.contains("delivery=full"));
         assert!(full.text.contains("A1"));
+        drop(view);
+        drop(autosync);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rendered_context_packets_respect_public_budget_boundaries() {
+        let root = temp_root("context-budget-boundaries-test");
+        efficiency_fixture(&root);
+        let autosync = AutoSync::default();
+        let view = open_project(&autosync, root.to_str()).unwrap();
+        for budget in [128, 600, 2_000] {
+            for map_requested in [false, true] {
+                let packet = context_packet(
+                    &view,
+                    ContextOptions {
+                        query: "inspect implementation run helper leaf",
+                        token_budget: budget,
+                        intent: ContextIntent::Inspect,
+                        delivery: Delivery::Delta,
+                        source: Some(LedgerSource {
+                            harness: "budget-test".into(),
+                            session_id: format!("{budget}-{map_requested}"),
+                        }),
+                        cursor: None,
+                        map_requested,
+                    },
+                )
+                .unwrap();
+                let declared = packet
+                    .text
+                    .lines()
+                    .next()
+                    .and_then(|header| {
+                        header
+                            .split_whitespace()
+                            .find_map(|field| field.strip_prefix("used≈"))
+                    })
+                    .and_then(|used| used.parse::<usize>().ok())
+                    .unwrap();
+                assert!(
+                    estimate_tokens(&packet.text) <= budget,
+                    "{} token packet exceeded its {} token budget:\n{}",
+                    estimate_tokens(&packet.text),
+                    budget,
+                    packet.text
+                );
+                assert_eq!(declared, estimate_tokens(&packet.text));
+            }
+        }
         drop(view);
         drop(autosync);
         fs::remove_dir_all(root).unwrap();

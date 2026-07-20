@@ -14,6 +14,7 @@ use spectra_core::estimate_tokens;
 
 const SYSTEM_PROMPT: &str = "You are evaluating a local code repository. Use only the supplied local tools. Do not edit files. Return a concise answer with exact path:start-end anchors for every material claim. For flows, order the anchors. For change or repair work, name focused tests. Stop once the evidence is sufficient.";
 const MAX_TOOL_OUTPUT: usize = 30_000;
+const MAX_SPECTRA_CONTEXT_CALLS: u64 = 2;
 
 #[derive(Debug, Parser)]
 #[command(about = "Run the complete Spectra v0.4 holdout with Grok")]
@@ -285,7 +286,6 @@ fn run_arm(
         }
         return Ok(serde_json::from_slice(&fs::read(summary_path)?)?);
     }
-    let tools = tool_schemas(arm);
     let mut delivery = DeliveryAccounting::default();
     let mut result = ArmResult::default();
     let initial_context = if arm == ArmKind::Spectra {
@@ -309,6 +309,10 @@ fn run_arm(
         }),
     ];
     for turn in 0..args.max_turns {
+        let tools = tool_schemas(
+            arm,
+            arm != ArmKind::Spectra || result.spectra_calls < MAX_SPECTRA_CONTEXT_CALLS,
+        );
         let raw_path = arm_dir.join(format!("turn-{turn}.json"));
         let (response, elapsed) = api_response(key, &args.model, &history, &tools, &raw_path)?;
         result.latency_ms = result.latency_ms.saturating_add(elapsed as u64);
@@ -329,9 +333,16 @@ fn run_arm(
             let name = call["name"].as_str().unwrap_or_default();
             let arguments: Value = serde_json::from_str(call["arguments"].as_str().unwrap_or("{}"))
                 .unwrap_or_else(|_| json!({}));
-            let output = execute_tool(args, repository, task, arm, name, &arguments)?;
+            let context_limit_reached =
+                name == "spectra_context" && result.spectra_calls >= MAX_SPECTRA_CONTEXT_CALLS;
+            let output = if context_limit_reached {
+                "context_limit reached; use the supplied anchors with read_source and answer."
+                    .into()
+            } else {
+                execute_tool(args, repository, task, arm, name, &arguments)?
+            };
             result.retrieval_calls += 1;
-            if name == "spectra_context" {
+            if name == "spectra_context" && !context_limit_reached {
                 result.spectra_calls += 1;
                 account_packet(&mut delivery, &output);
             }
@@ -393,7 +404,7 @@ fn replay_tool_traces(
     Ok(())
 }
 
-fn tool_schemas(arm: ArmKind) -> Value {
+fn tool_schemas(arm: ArmKind, allow_spectra_context: bool) -> Value {
     let read = json!({
         "type":"function", "name":"read_source",
         "description":"Read a bounded, line-numbered source range after locating an exact file.",
@@ -409,15 +420,17 @@ fn tool_schemas(arm: ArmKind) -> Value {
             "parameters":{"type":"object","properties":{"query":{"type":"string"}},
             "required":["query"],"additionalProperties":false}, "strict":true
         }, read])
-    } else {
+    } else if allow_spectra_context {
         json!([{
             "type":"function", "name":"spectra_context",
-            "description":"Get another budgeted adaptive context packet. Prefer the initial packet and call again only when evidence is insufficient.",
+            "description":"Get the single available follow-up context packet only when the initial packet is insufficient. Use read_source for source detail.",
             "parameters":{"type":"object","properties":{
                 "query":{"type":"string"},
                 "intent":{"type":"string","enum":["auto","resume","locate","flow","change","inspect"]}
             },"required":["query","intent"],"additionalProperties":false}, "strict":true
         }, read])
+    } else {
+        json!([read])
     }
 }
 
@@ -807,7 +820,8 @@ fn gate_arm(result: &ArmResult, schema_estimate: u64) -> GateArm {
 }
 
 fn tool_schema_estimate(arm: ArmKind, calls: u64) -> u64 {
-    estimate_tokens(&serde_json::to_string(&tool_schemas(arm)).unwrap_or_default()) as u64 * calls
+    estimate_tokens(&serde_json::to_string(&tool_schemas(arm, true)).unwrap_or_default()) as u64
+        * calls
 }
 
 fn privacy_findings(corpus: &Path, manifest: &Manifest) -> Vec<String> {
@@ -1025,5 +1039,15 @@ mod tests {
         )
         .unwrap();
         assert!(output.starts_with("tool_error read_source failed:"));
+    }
+
+    #[test]
+    fn spectra_context_schema_is_removed_after_the_call_ceiling() {
+        let available = tool_schemas(ArmKind::Spectra, true).to_string();
+        let exhausted = tool_schemas(ArmKind::Spectra, false).to_string();
+        assert!(available.contains("spectra_context"));
+        assert!(!exhausted.contains("spectra_context"));
+        assert!(exhausted.contains("read_source"));
+        assert_eq!(MAX_SPECTRA_CONTEXT_CALLS, 2);
     }
 }

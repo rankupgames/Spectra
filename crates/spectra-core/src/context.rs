@@ -66,9 +66,16 @@ pub fn pack_evidence(
         if record.shrink_lines {
             shrink_source_window(&mut record.text, remaining);
         }
-        let tokens = estimate_tokens(&record.text);
-        if packed.estimated_tokens + tokens <= budget {
-            packed.estimated_tokens += tokens;
+        let candidate = packed
+            .records
+            .iter()
+            .map(|record| record.text.as_str())
+            .chain(std::iter::once(record.text.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let tokens = estimate_tokens(&candidate);
+        if tokens <= budget {
+            packed.estimated_tokens = tokens;
             packed.records.push(record);
         } else {
             next = Some(rank);
@@ -159,5 +166,27 @@ mod tests {
         let packed = pack_evidence([record], budget, 0);
         assert_eq!(packed.records.len(), 1);
         assert_eq!(packed.records[0].text, "S A1\n10\tfirst source line");
+    }
+
+    #[test]
+    fn packer_accounts_for_separators_between_records() {
+        let text = "x".repeat(300);
+        let records = (0..2).map(|index| EvidenceRecord {
+            id: index.to_string(),
+            priority: 1,
+            text: text.clone(),
+            shrink_lines: false,
+        });
+        let budget = estimate_tokens(&text) * 2;
+        let packed = pack_evidence(records, budget, 0);
+        let joined = packed
+            .records
+            .iter()
+            .map(|record| record.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(packed.records.len(), 1);
+        assert_eq!(packed.omitted, 1);
+        assert!(estimate_tokens(&joined) <= budget);
     }
 }
