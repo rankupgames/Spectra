@@ -18,9 +18,10 @@ use spectra_core::LedgerSource;
 use spectra_render::{MapArtifact, map_project};
 
 use crate::autosync::{AutoSync, SyncSnapshot};
+use crate::context_state::{self, Delivery};
 use crate::mcp_query::{
-    self, BriefOptions, ChangeOptions, Direction, FileFormat, NodeViewOptions, PathMode,
-    PathOptions,
+    self, BriefOptions, ChangeOptions, ContextIntent, ContextOptions, Direction, FileFormat,
+    NodeViewOptions, PathMode, PathOptions,
 };
 
 #[derive(Clone, Default)]
@@ -90,6 +91,79 @@ struct BriefRequest {
     detail: Option<BriefDetailRequest>,
     /// Optional exact lifecycle session. Without it, no session state is emitted.
     source: Option<BriefSourceRequest>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum ContextIntentRequest {
+    #[default]
+    Auto,
+    Resume,
+    Locate,
+    Flow,
+    Change,
+    Inspect,
+}
+
+impl From<ContextIntentRequest> for ContextIntent {
+    fn from(value: ContextIntentRequest) -> Self {
+        match value {
+            ContextIntentRequest::Auto => Self::Auto,
+            ContextIntentRequest::Resume => Self::Resume,
+            ContextIntentRequest::Locate => Self::Locate,
+            ContextIntentRequest::Flow => Self::Flow,
+            ContextIntentRequest::Change => Self::Change,
+            ContextIntentRequest::Inspect => Self::Inspect,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum ContextRepresentationRequest {
+    #[default]
+    Text,
+    Map,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum ContextDeliveryRequest {
+    #[default]
+    Delta,
+    Full,
+}
+
+impl From<ContextDeliveryRequest> for Delivery {
+    fn from(value: ContextDeliveryRequest) -> Self {
+        match value {
+            ContextDeliveryRequest::Delta => Self::Delta,
+            ContextDeliveryRequest::Full => Self::Full,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+struct ContextRequest {
+    /// Current coding goal or code-navigation question.
+    query: String,
+    /// Absolute project path, or any directory inside the project.
+    #[serde(rename = "projectPath", alias = "project_path")]
+    project_path: Option<String>,
+    /// Total text budget in estimated tokens. Defaults to 600.
+    #[serde(rename = "tokenBudget", alias = "token_budget")]
+    #[schemars(range(min = 128, max = 2000))]
+    token_budget: Option<u16>,
+    /// Deterministic retrieval route. Defaults to automatic classification.
+    intent: Option<ContextIntentRequest>,
+    /// Text by default; map must be requested explicitly.
+    representation: Option<ContextRepresentationRequest>,
+    /// Delta for a supplied session, otherwise a safe full packet.
+    delivery: Option<ContextDeliveryRequest>,
+    /// Optional exact lifecycle session used for continuity and deduplication.
+    source: Option<BriefSourceRequest>,
+    /// Opaque continuation cursor returned by a previous packet.
+    cursor: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, JsonSchema)]
@@ -287,6 +361,90 @@ struct FilesRequest {
 
 #[tool_router]
 impl SpectraServer {
+    #[tool(
+        name = "spectra_context",
+        description = "Return the smallest sufficient, budgeted code context for the next decision. Text-only unless representation=map; exact sessions receive durable delta delivery.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn spectra_context(
+        &self,
+        Parameters(request): Parameters<ContextRequest>,
+    ) -> CallToolResult {
+        if let Some(error) = validate_required(&request.query, "query") {
+            return error;
+        }
+        if request
+            .cursor
+            .as_ref()
+            .is_some_and(|cursor| cursor.len() > 2_048)
+        {
+            return CallToolResult::error(vec![ContentBlock::text(
+                "cursor exceeds 2048 characters",
+            )]);
+        }
+        let source = match parse_source(request.source) {
+            Ok(source) => source,
+            Err(error) => return error,
+        };
+        let map_requested = matches!(
+            request.representation,
+            Some(ContextRepresentationRequest::Map)
+        );
+        let view = match mcp_query::open_project(&self.autosync, request.project_path.as_deref()) {
+            Ok(view) => view,
+            Err(error) => {
+                return CallToolResult::error(vec![ContentBlock::text(format!(
+                    "spectra_context could not open an indexed project: {error}"
+                ))]);
+            }
+        };
+        let packet = match mcp_query::context_packet(
+            &view,
+            ContextOptions {
+                query: &request.query,
+                token_budget: usize::from(request.token_budget.unwrap_or(600)),
+                intent: request.intent.unwrap_or_default().into(),
+                delivery: request.delivery.unwrap_or_default().into(),
+                source,
+                cursor: request.cursor.as_deref(),
+                map_requested,
+            },
+        ) {
+            Ok(packet) => packet,
+            Err(error) => {
+                context_state::record_error(&view.root);
+                return CallToolResult::error(vec![ContentBlock::text(format!(
+                    "spectra_context failed: {error}"
+                ))]);
+            }
+        };
+        if !map_requested {
+            return CallToolResult::success(vec![ContentBlock::text(packet.text)]);
+        }
+        let output = view.root.join(".spectra/artifacts");
+        match map_project(&view.root, &request.query, 48, &output).and_then(|artifact| {
+            fs::read(&artifact.png_path)
+                .map(|png| (artifact, png))
+                .map_err(Into::into)
+        }) {
+            Ok((_artifact, png)) => CallToolResult::success(vec![
+                ContentBlock::image(STANDARD.encode(png), "image/png"),
+                ContentBlock::text(packet.text),
+            ]),
+            Err(error) => {
+                context_state::record_error(&view.root);
+                CallToolResult::error(vec![ContentBlock::text(format!(
+                    "spectra_context map failed: {error}"
+                ))])
+            }
+        }
+    }
+
     #[tool(
         name = "spectra_map",
         description = "Render a compact PNG code-topology map for a polyglot architecture question. Returns an image plus exact file/line anchors, never source bodies.",
@@ -703,8 +861,8 @@ impl SpectraServer {
 
 #[tool_handler(
     name = "spectra",
-    version = "0.3.0",
-    instructions = "Use spectra_brief to start or resume work with bounded continuity and ranked anchors. Use spectra_map for visual architecture questions. Change impact, typed paths, bounded source exploration, targeted search, node, caller/callee, file-tree, and status tools are available through SPECTRA_MCP_TOOLS."
+    version = "0.4.0",
+    instructions = "Use spectra_context for budgeted, text-first code context. Request representation=map explicitly when a visual topology is worth provider image tokens. Legacy focused tools remain available through SPECTRA_MCP_TOOLS."
 )]
 impl ServerHandler for SpectraServer {
     async fn list_tools(
@@ -761,6 +919,24 @@ fn validate_optional_path(value: Option<&str>, field: &str) -> Option<CallToolRe
     })
 }
 
+fn parse_source(
+    source: Option<BriefSourceRequest>,
+) -> Result<Option<LedgerSource>, CallToolResult> {
+    let Some(source) = source else {
+        return Ok(None);
+    };
+    if let Some(error) = validate_required(&source.harness, "source.harness") {
+        return Err(error);
+    }
+    if let Some(error) = validate_required(&source.session_id, "source.sessionId") {
+        return Err(error);
+    }
+    Ok(Some(LedgerSource {
+        harness: source.harness,
+        session_id: source.session_id,
+    }))
+}
+
 fn relationship_result(
     autosync: &AutoSync,
     request: RelationshipRequest,
@@ -809,9 +985,7 @@ fn allowed_tools(raw: Option<&str>) -> BTreeSet<String> {
         .map(|tool| tool.name.into_owned())
         .collect::<BTreeSet<_>>();
     let Some(raw) = raw.filter(|raw| !raw.trim().is_empty()) else {
-        return ["spectra_brief".to_owned(), "spectra_map".to_owned()]
-            .into_iter()
-            .collect();
+        return ["spectra_context".to_owned()].into_iter().collect();
     };
     if raw.trim() == "all" {
         return all;
@@ -912,7 +1086,7 @@ mod tests {
     }
 
     #[test]
-    fn server_pins_the_codegraph_parity_tool_contract() {
+    fn server_pins_the_v04_and_legacy_tool_contracts() {
         let server = SpectraServer::default();
         assert_eq!(server.get_info().server_info.name, "spectra");
         assert_eq!(
@@ -927,6 +1101,7 @@ mod tests {
         assert_eq!(
             names,
             [
+                "spectra_context",
                 "spectra_map",
                 "spectra_brief",
                 "spectra_explore",
@@ -943,10 +1118,7 @@ mod tests {
             .into_iter()
             .collect()
         );
-        assert_eq!(
-            allowed_tools(None),
-            ["spectra_brief".to_owned(), "spectra_map".to_owned()].into()
-        );
+        assert_eq!(allowed_tools(None), ["spectra_context".to_owned()].into());
         assert_eq!(
             allowed_tools(Some("explore,node,status")),
             ["spectra_explore", "spectra_node", "spectra_status"]
@@ -954,8 +1126,11 @@ mod tests {
                 .map(str::to_owned)
                 .collect()
         );
-        assert_eq!(allowed_tools(Some("all")).len(), 12);
-        for tool in tools.iter().filter(|tool| tool.name != "spectra_map") {
+        assert_eq!(allowed_tools(Some("all")).len(), 13);
+        for tool in tools
+            .iter()
+            .filter(|tool| !matches!(tool.name.as_ref(), "spectra_map" | "spectra_context"))
+        {
             let annotations = tool.annotations.as_ref().expect("read tool annotations");
             assert_eq!(annotations.read_only_hint, Some(true));
             assert_eq!(annotations.idempotent_hint, Some(true));
@@ -963,6 +1138,19 @@ mod tests {
             assert!(schema["properties"].get("projectPath").is_some());
         }
         let expected_properties = [
+            (
+                "spectra_context",
+                &[
+                    "query",
+                    "projectPath",
+                    "tokenBudget",
+                    "intent",
+                    "representation",
+                    "delivery",
+                    "source",
+                    "cursor",
+                ][..],
+            ),
             (
                 "spectra_brief",
                 &["query", "projectPath", "tokenBudget", "detail", "source"][..],
@@ -1061,6 +1249,21 @@ mod tests {
         assert_eq!(brief.project_path.as_deref(), Some("/tmp/project"));
         assert_eq!(brief.token_budget, Some(512));
         assert_eq!(brief.source.unwrap().session_id, "s1");
+        let context: ContextRequest = serde_json::from_value(serde_json::json!({
+            "query":"resume",
+            "project_path":"/tmp/project",
+            "token_budget":512,
+            "representation":"map",
+            "delivery":"full",
+            "source":{"harness":"custom","session_id":"s1"}
+        }))
+        .unwrap();
+        assert_eq!(context.project_path.as_deref(), Some("/tmp/project"));
+        assert_eq!(context.token_budget, Some(512));
+        assert!(matches!(
+            context.representation,
+            Some(ContextRepresentationRequest::Map)
+        ));
         let changes: ChangesRequest = serde_json::from_value(serde_json::json!({
             "project_path":"/tmp/project",
             "include_tests":false,

@@ -3,16 +3,23 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
+    time::Instant,
 };
 
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use serde::{Deserialize, Serialize};
 use spectra_core::ledger::redact_text;
 use spectra_core::{
-    CodeIndex, IndexReport, LedgerEventKind, LedgerSource, LedgerStore, SelectionOptions,
+    CodeIndex, EvidenceRecord, IndexReport, LedgerEventKind, LedgerSource, LedgerStore,
+    SelectionOptions, estimate_tokens,
     graph::{EdgeId, NodeId},
     select_subgraph, supported_languages,
 };
 
-use crate::autosync::{AutoSync, SyncSnapshot};
+use crate::{
+    autosync::{AutoSync, SyncSnapshot},
+    context_state::{self, Delivery},
+};
 
 const MAX_TEXT: usize = 24_000;
 const MAX_SOURCE_LINES: usize = 2_000;
@@ -52,6 +59,44 @@ pub(crate) struct BriefOptions<'a> {
     pub(crate) token_budget: usize,
     pub(crate) include_source: bool,
     pub(crate) source: Option<LedgerSource>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ContextIntent {
+    Auto,
+    Resume,
+    Locate,
+    Flow,
+    Change,
+    Inspect,
+}
+
+impl ContextIntent {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Resume => "resume",
+            Self::Locate => "locate",
+            Self::Flow => "flow",
+            Self::Change => "change",
+            Self::Inspect => "inspect",
+        }
+    }
+}
+
+pub(crate) struct ContextOptions<'a> {
+    pub(crate) query: &'a str,
+    pub(crate) token_budget: usize,
+    pub(crate) intent: ContextIntent,
+    pub(crate) delivery: Delivery,
+    pub(crate) source: Option<LedgerSource>,
+    pub(crate) cursor: Option<&'a str>,
+    pub(crate) map_requested: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ContextPacket {
+    pub(crate) text: String,
 }
 
 pub(crate) struct ChangeOptions<'a> {
@@ -102,6 +147,285 @@ pub(crate) fn open_project(
         report,
         sync,
     })
+}
+
+pub(crate) fn context_packet(
+    view: &ProjectView,
+    options: ContextOptions<'_>,
+) -> Result<ContextPacket, Box<dyn std::error::Error>> {
+    let started = Instant::now();
+    let budget = options.token_budget.clamp(128, 2_000);
+    let intent = if options.intent == ContextIntent::Auto {
+        classify_intent(options.query)
+    } else {
+        options.intent
+    };
+    let cursor = options
+        .cursor
+        .map(decode_cursor)
+        .transpose()?
+        .unwrap_or_default();
+    let query_hash = context_state::digest("context-query-v1", options.query);
+    if options.cursor.is_some()
+        && (cursor.query_hash != query_hash
+            || cursor.index_version != view.index.version
+            || cursor.intent != intent.as_str())
+    {
+        return Err("cursor_stale: query, intent, or index changed; restart without cursor".into());
+    }
+
+    let selection = select_subgraph(
+        &view.index,
+        options.query,
+        SelectionOptions { max_nodes: 48 },
+    );
+    let ledger = LedgerStore::open(&view.root)?;
+    let projection = options
+        .source
+        .as_ref()
+        .map(|source| ledger.projection_for(source).text)
+        .unwrap_or_else(|| ledger.project_facts().text);
+    let sequence = ledger.events().len() as u64;
+    let mut records = Vec::new();
+    if !projection.trim().is_empty() {
+        push_evidence(
+            &mut records,
+            1_000,
+            format!("state {}", projection.replace('\n', "; ")),
+        );
+    }
+
+    let anchors = selection
+        .nodes
+        .iter()
+        .copied()
+        .filter(|node| view.index.graph.kind(*node) != "file")
+        .take(12)
+        .collect::<Vec<_>>();
+    let anchor_ids = anchors
+        .iter()
+        .enumerate()
+        .map(|(index, node)| (*node, format!("A{}", index + 1)))
+        .collect::<BTreeMap<_, _>>();
+    for node in &anchors {
+        let id = &anchor_ids[node];
+        let span = view.index.spans.get(node);
+        let path = node_path(view, *node).unwrap_or("<unknown>");
+        let qualified = view
+            .index
+            .qualified_names
+            .get(node)
+            .map(String::as_str)
+            .unwrap_or_else(|| view.index.graph.label(*node));
+        push_evidence(
+            &mut records,
+            900,
+            format!(
+                "{id} {} {qualified} @ {path}:{}-{}",
+                view.index.graph.kind(*node),
+                span.map(|span| span.start_line).unwrap_or(0),
+                span.map(|span| span.end_line).unwrap_or(0)
+            ),
+        );
+    }
+
+    if intent == ContextIntent::Change {
+        for line in changes(
+            view,
+            ChangeOptions {
+                base: "HEAD",
+                paths: None,
+                depth: 2,
+                include_tests: true,
+                token_budget: 2_000,
+            },
+        )
+        .lines()
+        .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
+        {
+            push_evidence(&mut records, 850, format!("change {line}"));
+        }
+    }
+
+    if matches!(
+        intent,
+        ContextIntent::Flow | ContextIntent::Locate | ContextIntent::Inspect
+    ) {
+        for edge in &view.index.graph.edges {
+            let (Some(source), Some(target)) =
+                (anchor_ids.get(&edge.source), anchor_ids.get(&edge.target))
+            else {
+                continue;
+            };
+            let kind = view.index.graph.atom(edge.kind);
+            if kind != "contains" {
+                push_evidence(&mut records, 800, format!("E {source} {kind} {target}"));
+            }
+        }
+    }
+
+    if intent == ContextIntent::Inspect {
+        for node in anchors.iter().take(3) {
+            let Some(path) = node_path(view, *node) else {
+                continue;
+            };
+            let source = source_window(view, path, &[*node], 24, MAX_TEXT)
+                .unwrap_or_else(|error| format!("> Source unavailable: {error}"));
+            for line in source.lines() {
+                push_evidence(&mut records, 600, format!("S {} {line}", anchor_ids[node]));
+            }
+        }
+    }
+    if let Some(first) = anchors.first() {
+        push_evidence(
+            &mut records,
+            100,
+            format!(
+                "next inspect {} file={}",
+                view.index.graph.label(*first),
+                node_path(view, *first).unwrap_or("<unknown>")
+            ),
+        );
+    }
+
+    let delivery = context_state::deliver(
+        &view.root,
+        records,
+        context_state::DeliveryRequest {
+            source: options.source.as_ref(),
+            requested: options.delivery,
+            token_budget: budget.saturating_sub(64),
+            offset: cursor.offset,
+            index_version: view.index.version,
+            ledger_sequence: sequence,
+        },
+    );
+    let packet_seed = delivery
+        .packed
+        .records
+        .iter()
+        .map(|record| record.id.as_str())
+        .collect::<Vec<_>>()
+        .join(":");
+    let packet_id = &context_state::digest("context-packet-v1", &packet_seed)[..12];
+    let mut lines = vec![String::new()];
+    lines.extend(
+        delivery
+            .packed
+            .records
+            .iter()
+            .map(|record| record.text.clone()),
+    );
+    if delivery.packed.records.is_empty() && delivery.duplicate_evidence > 0 {
+        lines.push(format!("unchanged sequence={sequence}"));
+    }
+    let next = delivery.packed.next_offset.map(|offset| {
+        encode_cursor(&ContextCursor {
+            query_hash: query_hash.clone(),
+            index_version: view.index.version,
+            intent: intent.as_str().into(),
+            offset,
+        })
+    });
+    lines.push(format!(
+        "omitted={}{}",
+        delivery.packed.omitted,
+        next.as_ref()
+            .map(|cursor| format!(" next={cursor}"))
+            .unwrap_or_default()
+    ));
+    let provisional = lines.join("\n");
+    let used = estimate_tokens(&provisional);
+    lines[0] = format!(
+        "C1 id=p{packet_id} intent={} index=v{} budget={budget} used≈{used} delivery={} image_cost={}",
+        intent.as_str(),
+        view.index.version,
+        delivery.effective_delivery.as_str(),
+        if options.map_requested {
+            "provider"
+        } else {
+            "none"
+        }
+    );
+    let mut text = lines.join("\n");
+    let mut estimated_tokens = estimate_tokens(&text);
+    if estimated_tokens != used {
+        lines[0] = lines[0].replace(&format!("used≈{used}"), &format!("used≈{estimated_tokens}"));
+        text = lines.join("\n");
+        estimated_tokens = estimate_tokens(&text);
+    }
+    context_state::record_metrics(
+        &view.root,
+        context_state::MetricSample {
+            intent: intent.as_str(),
+            estimated_tokens,
+            duplicates: delivery.duplicate_evidence,
+            map: options.map_requested,
+            error: false,
+            delivery: delivery.effective_delivery,
+            elapsed: started.elapsed(),
+        },
+    );
+    Ok(ContextPacket { text })
+}
+
+fn classify_intent(query: &str) -> ContextIntent {
+    let query = query.to_ascii_lowercase();
+    if [
+        "resume", "continue", "pick up", "blocked", "failed", "failure",
+    ]
+    .iter()
+    .any(|term| query.contains(term))
+    {
+        ContextIntent::Resume
+    } else if [
+        "change", "changed", "impact", "worktree", "affected", "tests",
+    ]
+    .iter()
+    .any(|term| query.contains(term))
+    {
+        ContextIntent::Change
+    } else if query.starts_with("how ")
+        || [" flow ", " reach ", " path ", " calls "]
+            .iter()
+            .any(|term| query.contains(term))
+    {
+        ContextIntent::Flow
+    } else if ["source", "implementation", "inspect", "show code", "read "]
+        .iter()
+        .any(|term| query.contains(term))
+    {
+        ContextIntent::Inspect
+    } else {
+        ContextIntent::Locate
+    }
+}
+
+fn push_evidence(records: &mut Vec<EvidenceRecord>, priority: i32, text: String) {
+    records.push(EvidenceRecord {
+        id: context_state::digest("context-evidence-v1", &text),
+        priority,
+        text,
+    });
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct ContextCursor {
+    query_hash: String,
+    index_version: u32,
+    intent: String,
+    offset: usize,
+}
+
+fn encode_cursor(cursor: &ContextCursor) -> String {
+    URL_SAFE_NO_PAD.encode(serde_json::to_vec(cursor).unwrap_or_default())
+}
+
+fn decode_cursor(value: &str) -> Result<ContextCursor, Box<dyn std::error::Error>> {
+    if value.len() > 2_048 {
+        return Err("cursor exceeds 2048 characters".into());
+    }
+    Ok(serde_json::from_slice(&URL_SAFE_NO_PAD.decode(value)?)?)
 }
 
 pub(crate) fn search(view: &ProjectView, query: &str, kind: Option<&str>, limit: usize) -> String {
@@ -1851,6 +2175,123 @@ mod tests {
         );
         assert!(ambiguous.contains("ambiguous"));
         assert!(ambiguous.contains("duplicate_a.py"));
+        drop(view);
+        drop(autosync);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn adaptive_context_is_budgeted_classified_and_session_deduplicated() {
+        let root = temp_root("adaptive-context-test");
+        efficiency_fixture(&root);
+        let source = LedgerSource {
+            harness: "custom".into(),
+            session_id: "one".into(),
+        };
+        LedgerStore::transaction(&root, |ledger| {
+            ledger.append_for(
+                source.clone(),
+                LedgerEventKind::EditObserved {
+                    paths: vec!["app.py".into()],
+                },
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let autosync = AutoSync::default();
+        let view = open_project(&autosync, root.to_str()).unwrap();
+        let first = context_packet(
+            &view,
+            ContextOptions {
+                query: "How does run reach leaf?",
+                token_budget: 256,
+                intent: ContextIntent::Auto,
+                delivery: Delivery::Delta,
+                source: Some(source.clone()),
+                cursor: None,
+                map_requested: false,
+            },
+        )
+        .unwrap();
+        assert!(first.text.contains("intent=flow"));
+        assert!(first.text.contains("image_cost=none"));
+        assert!(first.text.contains("state S"));
+        assert!(first.text.contains("A1"));
+        assert!(estimate_tokens(&first.text) <= 256);
+        let duplicate = context_packet(
+            &view,
+            ContextOptions {
+                query: "How does run reach leaf?",
+                token_budget: 256,
+                intent: ContextIntent::Auto,
+                delivery: Delivery::Delta,
+                source: Some(source.clone()),
+                cursor: None,
+                map_requested: false,
+            },
+        )
+        .unwrap();
+        assert!(duplicate.text.contains("unchanged sequence="));
+        assert!(!duplicate.text.contains("private source body"));
+        let full = context_packet(
+            &view,
+            ContextOptions {
+                query: "How does run reach leaf?",
+                token_budget: 256,
+                intent: ContextIntent::Flow,
+                delivery: Delivery::Full,
+                source: Some(source),
+                cursor: None,
+                map_requested: false,
+            },
+        )
+        .unwrap();
+        assert!(full.text.contains("delivery=full"));
+        assert!(full.text.contains("A1"));
+        drop(view);
+        drop(autosync);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn context_cursor_rejects_a_changed_query() {
+        let root = temp_root("context-cursor-test");
+        efficiency_fixture(&root);
+        let autosync = AutoSync::default();
+        let view = open_project(&autosync, root.to_str()).unwrap();
+        let first = context_packet(
+            &view,
+            ContextOptions {
+                query: "inspect implementation run helper leaf",
+                token_budget: 128,
+                intent: ContextIntent::Inspect,
+                delivery: Delivery::Full,
+                source: None,
+                cursor: None,
+                map_requested: false,
+            },
+        )
+        .unwrap();
+        let cursor = first
+            .text
+            .split("next=")
+            .nth(1)
+            .expect("bounded packet has a continuation")
+            .trim();
+        let error = context_packet(
+            &view,
+            ContextOptions {
+                query: "different query",
+                token_budget: 128,
+                intent: ContextIntent::Inspect,
+                delivery: Delivery::Full,
+                source: None,
+                cursor: Some(cursor),
+                map_requested: false,
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("cursor_stale"));
         drop(view);
         drop(autosync);
         fs::remove_dir_all(root).unwrap();

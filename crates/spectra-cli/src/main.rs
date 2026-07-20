@@ -1,5 +1,6 @@
 mod agents;
 mod autosync;
+mod context_state;
 mod git_sync;
 mod hook;
 mod install;
@@ -15,8 +16,13 @@ use std::{
 
 use agents::{Agent, Location};
 use clap::{Parser, Subcommand, ValueEnum};
-use spectra_core::{CodeIndex, INDEX_VERSION, IndexReport, sync_project};
+use spectra_core::{CodeIndex, INDEX_VERSION, IndexReport, LedgerSource, sync_project};
 use spectra_render::{MapArtifact, map_project};
+
+use crate::{
+    context_state::Delivery,
+    mcp_query::{ContextIntent, ContextOptions},
+};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -119,6 +125,35 @@ enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Produce one budgeted adaptive Context Packet v1.
+    Context {
+        query: String,
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+        #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u16).range(128..=2000))]
+        token_budget: u16,
+        #[arg(long, value_enum, default_value_t = CliContextIntent::Auto)]
+        intent: CliContextIntent,
+        #[arg(long, value_enum, default_value_t = CliRepresentation::Text)]
+        representation: CliRepresentation,
+        #[arg(long, value_enum, default_value_t = CliDelivery::Delta)]
+        delivery: CliDelivery,
+        #[arg(long, requires = "session_id")]
+        source_harness: Option<String>,
+        #[arg(long, requires = "source_harness")]
+        session_id: Option<String>,
+        #[arg(long)]
+        cursor: Option<String>,
+    },
+    /// Show or reset privacy-safe local context efficiency counters.
+    Stats {
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        reset: bool,
+    },
     /// Run Spectra's MCP server over stdio.
     Serve {
         #[arg(long)]
@@ -127,6 +162,53 @@ enum Command {
         #[arg(long)]
         path: Option<PathBuf>,
     },
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+enum CliContextIntent {
+    #[default]
+    Auto,
+    Resume,
+    Locate,
+    Flow,
+    Change,
+    Inspect,
+}
+
+impl From<CliContextIntent> for ContextIntent {
+    fn from(value: CliContextIntent) -> Self {
+        match value {
+            CliContextIntent::Auto => Self::Auto,
+            CliContextIntent::Resume => Self::Resume,
+            CliContextIntent::Locate => Self::Locate,
+            CliContextIntent::Flow => Self::Flow,
+            CliContextIntent::Change => Self::Change,
+            CliContextIntent::Inspect => Self::Inspect,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+enum CliRepresentation {
+    #[default]
+    Text,
+    Map,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+enum CliDelivery {
+    #[default]
+    Delta,
+    Full,
+}
+
+impl From<CliDelivery> for Delivery {
+    fn from(value: CliDelivery) -> Self {
+        match value {
+            CliDelivery::Delta => Self::Delta,
+            CliDelivery::Full => Self::Full,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -289,6 +371,68 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             println!("PNG {}", display_relative(&artifact.png_path, &path));
             println!("SVG {}", display_relative(&artifact.svg_path, &path));
             print_anchors(&artifact);
+        }
+        Command::Context {
+            query,
+            path,
+            token_budget,
+            intent,
+            representation,
+            delivery,
+            source_harness,
+            session_id,
+            cursor,
+        } => {
+            let source = source_harness
+                .zip(session_id)
+                .map(|(harness, session_id)| LedgerSource {
+                    harness,
+                    session_id,
+                });
+            let autosync = autosync::AutoSync::default();
+            let view = mcp_query::open_project(&autosync, path.to_str())?;
+            let map_requested = representation == CliRepresentation::Map;
+            let packet = mcp_query::context_packet(
+                &view,
+                ContextOptions {
+                    query: &query,
+                    token_budget: usize::from(token_budget),
+                    intent: intent.into(),
+                    delivery: delivery.into(),
+                    source,
+                    cursor: cursor.as_deref(),
+                    map_requested,
+                },
+            )?;
+            println!("{}", packet.text);
+            if map_requested {
+                let output = view.root.join(".spectra/artifacts");
+                let artifact = map_project(&view.root, &query, 48, &output)?;
+                println!("PNG {}", display_relative(&artifact.png_path, &view.root));
+                println!("SVG {}", display_relative(&artifact.svg_path, &view.root));
+            }
+        }
+        Command::Stats { path, json, reset } => {
+            if reset {
+                context_state::reset_metrics(&path)?;
+            }
+            let metrics = context_state::read_metrics(&path)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&metrics)?);
+            } else if reset {
+                println!("Spectra context metrics reset.");
+            } else {
+                println!(
+                    "Spectra Context Stats\ncalls={} emitted_estimated_tokens={} duplicate_evidence_avoided={} maps_requested={} errors={} full={} delta={}",
+                    metrics.calls,
+                    metrics.estimated_tokens_emitted,
+                    metrics.duplicate_evidence_avoided,
+                    metrics.maps_requested,
+                    metrics.errors,
+                    metrics.full_deliveries,
+                    metrics.delta_deliveries
+                );
+            }
         }
         Command::Serve {
             mcp: true,
