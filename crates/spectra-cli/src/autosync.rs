@@ -630,7 +630,9 @@ mod tests {
     }
 
     fn wait_for(condition: impl Fn() -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // FSEvents delivery can lag behind the polling fallback on busy hosted
+        // macOS runners, especially while the workspace is still compiling.
+        let deadline = Instant::now() + Duration::from_secs(15);
         while !condition() {
             assert!(
                 Instant::now() < deadline,
