@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/rankupgames/Spectra/benchmarks/v0.4-report-schema.json",
+  "title": "Spectra v0.4 reviewed efficiency report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "environments", "tasks", "forbidden_findings"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "environments": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "harness", "model"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "harness": { "type": "string", "minLength": 1 },
+          "model": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "repository", "environment_id", "category", "baseline", "spectra", "packets_within_budget", "packets_total"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "repository": { "type": "string", "minLength": 1 },
+          "environment_id": { "type": "string", "minLength": 1 },
+          "category": { "enum": ["navigation", "change-impact", "flow", "repair", "resume"] },
+          "baseline": { "$ref": "#/$defs/arm" },
+          "spectra": { "$ref": "#/$defs/arm" },
+          "packets_within_budget": { "type": "integer", "minimum": 0 },
+          "packets_total": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
+    "forbidden_findings": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "$defs": {
+    "arm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_tokens", "input_schema_tokens", "input_text_tokens", "image_tokens", "cached_input_tokens", "output_tokens", "solved", "tool_calls", "latency_ms", "repeated_context_bytes"],
+      "properties": {
+        "input_tokens": { "type": "integer", "minimum": 1 },
+        "input_schema_tokens": { "type": "integer", "minimum": 0 },
+        "input_text_tokens": { "type": "integer", "minimum": 1 },
+        "image_tokens": { "type": "integer", "minimum": 0 },
+        "cached_input_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 1 },
+        "solved": { "type": "boolean" },
+        "tool_calls": { "type": "integer", "minimum": 0 },
+        "latency_ms": { "type": "integer", "minimum": 1 },
+        "repeated_context_bytes": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

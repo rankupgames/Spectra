@@ -1,0 +1,21 @@
+{
+  "version": "@VERSION@",
+  "description": "Token-efficient code context runtime for local AI agents",
+  "homepage": "https://github.com/rankupgames/Spectra",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/rankupgames/Spectra/releases/download/@TAG@/spectra-x86_64-pc-windows-msvc.zip",
+      "hash": "@WINDOWS_X64_SHA@"
+    }
+  },
+  "bin": "spectra.exe",
+  "checkver": "github",
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/rankupgames/Spectra/releases/download/v$version/spectra-x86_64-pc-windows-msvc.zip"
+      }
+    }
+  }
+}

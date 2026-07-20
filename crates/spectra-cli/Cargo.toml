@@ -50,3 +50,7 @@ path = "src/bin/spectra-ledger-grok-eval.rs"
 [[bin]]
 name = "spectra-adapter-eval"
 path = "src/bin/spectra-adapter-eval.rs"
+
+[[bin]]
+name = "spectra-v04-gate"
+path = "src/bin/spectra-v04-gate.rs"

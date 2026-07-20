@@ -6,6 +6,9 @@ pub struct EvidenceRecord {
     pub id: String,
     pub priority: i32,
     pub text: String,
+    /// Source windows may discard complete trailing lines to fit a packet.
+    /// Anchors, relations, and every other record remain indivisible.
+    pub shrink_lines: bool,
 }
 
 /// The result of packing evidence into a bounded context packet.
@@ -58,19 +61,35 @@ pub fn pack_evidence(
     let total = ranked.len();
     let mut packed = PackedEvidence::default();
     let mut next = None;
-    for (rank, (_, record)) in ranked.into_iter().enumerate().skip(offset) {
+    for (rank, (_, mut record)) in ranked.into_iter().enumerate().skip(offset) {
+        let remaining = budget.saturating_sub(packed.estimated_tokens);
+        if record.shrink_lines {
+            shrink_source_window(&mut record.text, remaining);
+        }
         let tokens = estimate_tokens(&record.text);
         if packed.estimated_tokens + tokens <= budget {
             packed.estimated_tokens += tokens;
             packed.records.push(record);
         } else {
-            next.get_or_insert(rank);
-            packed.omitted += 1;
+            next = Some(rank);
+            packed.omitted += total.saturating_sub(rank);
+            break;
         }
     }
     packed.omitted += offset.min(total);
     packed.next_offset = next;
     packed
+}
+
+fn shrink_source_window(text: &mut String, token_budget: usize) {
+    if estimate_tokens(text) <= token_budget {
+        return;
+    }
+    let mut lines = text.lines().collect::<Vec<_>>();
+    while lines.len() > 2 && estimate_tokens(&lines.join("\n")) > token_budget {
+        lines.pop();
+    }
+    *text = lines.join("\n");
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -98,16 +117,19 @@ mod tests {
                 id: "low".into(),
                 priority: 1,
                 text: "low priority evidence".into(),
+                shrink_lines: false,
             },
             EvidenceRecord {
                 id: "first".into(),
                 priority: 10,
                 text: "first anchor".into(),
+                shrink_lines: false,
             },
             EvidenceRecord {
                 id: "second".into(),
                 priority: 10,
                 text: "second anchor".into(),
+                shrink_lines: false,
             },
         ];
         let budget = estimate_tokens("first anchor") + estimate_tokens("second anchor");
@@ -122,5 +144,20 @@ mod tests {
         );
         assert_eq!(packed.omitted, 1);
         assert_eq!(packed.next_offset, Some(2));
+    }
+
+    #[test]
+    fn packer_shrinks_only_source_windows_by_complete_lines() {
+        let record = EvidenceRecord {
+            id: "source".into(),
+            priority: 1,
+            text: "S A1\n10\tfirst source line\n11\tsecond source line\n12\tthird source line"
+                .into(),
+            shrink_lines: true,
+        };
+        let budget = estimate_tokens("S A1\n10\tfirst source line");
+        let packed = pack_evidence([record], budget, 0);
+        assert_eq!(packed.records.len(), 1);
+        assert_eq!(packed.records[0].text, "S A1\n10\tfirst source line");
     }
 }

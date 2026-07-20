@@ -93,6 +93,21 @@ Codex, Claude, and Gemini must retain equivalent session facts. Cursor is gated 
 
 The post-hook deterministic regression must preserve the 93.4% median reduction and 100% minimum fact-recall baselines recorded during prototype development.
 
+## v0.4 adaptive-context release gate
+
+The v0.4 release requires a holdout corpus of at least 20 polyglot repositories and 100 tasks spanning navigation, change impact, flow, repair, and resume. Holdout repositories must not influence selector rules. Each task runs baseline and Spectra arms with the same harness, model, task instructions, provider settings, and clean repository state.
+
+Record provider input as separate schema, text, and image counts; record cached input as the provider-reported subset rather than adding it to the total. Also record output tokens, tool calls, latency, repeated context bytes, and final task success. The reviewed report format is defined by [`v0.4-report-schema.json`](v0.4-report-schema.json). A privacy review populates `forbidden_findings`; a release report must contain no source bodies, prompts, patches, terminal bodies, credentials, or raw session IDs in receipts or metrics.
+
+Validate a reviewed report with:
+
+```sh
+cargo run --release -p spectra-context --bin spectra-v04-gate -- \
+  benchmarks/results/reviewed-v0.4.json
+```
+
+The gate rejects fewer than 20 repositories, fewer than 100 unique tasks, fewer than two models or three harnesses, missing task categories, inconsistent provider-input accounting, or any privacy finding. It then requires at least 35% lower median provider input, at least 20% lower input at p75, solve rate within two percentage points of baseline, at least 70% fewer repeated context bytes, a median of at most two Spectra calls, and at least 95% budget-compliant text packets. Paid provider runs and task grading remain a reviewed release step; deterministic CI validates the gate itself and does not fabricate results.
+
 ## Agent efficiency scenarios
 
 [`fixtures/efficiency-tool-scenarios.json`](fixtures/efficiency-tool-scenarios.json) freezes three common agent workflows: resuming after failed verification, discovering worktree impact and tests, and tracing an A-to-B flow. The release test compares the previous focused-query call count with the composite `brief`, `changes`, or `path` call and requires at least 40% fewer median calls. Separate query tests gate token budgets, changed-path and verification retention, deterministic paths, session isolation, and exclusion of raw diffs, source bodies, terminal output, and credentials.

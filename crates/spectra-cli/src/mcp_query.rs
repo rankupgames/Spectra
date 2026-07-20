@@ -271,9 +271,11 @@ pub(crate) fn context_packet(
             };
             let source = source_window(view, path, &[*node], 24, MAX_TEXT)
                 .unwrap_or_else(|error| format!("> Source unavailable: {error}"));
-            for line in source.lines() {
-                push_evidence(&mut records, 600, format!("S {} {line}", anchor_ids[node]));
-            }
+            push_source_evidence(
+                &mut records,
+                600,
+                format!("S {}\n{source}", anchor_ids[node]),
+            );
         }
     }
     if let Some(first) = anchors.first() {
@@ -406,6 +408,16 @@ fn push_evidence(records: &mut Vec<EvidenceRecord>, priority: i32, text: String)
         id: context_state::digest("context-evidence-v1", &text),
         priority,
         text,
+        shrink_lines: false,
+    });
+}
+
+fn push_source_evidence(records: &mut Vec<EvidenceRecord>, priority: i32, text: String) {
+    records.push(EvidenceRecord {
+        id: context_state::digest("context-evidence-v1", &text),
+        priority,
+        text,
+        shrink_lines: true,
     });
 }
 

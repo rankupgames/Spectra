@@ -385,6 +385,7 @@ mod tests {
             id: digest("evidence", value),
             priority: 1,
             text: value.into(),
+            shrink_lines: false,
         }
     }
 

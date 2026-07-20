@@ -1,0 +1,152 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v-prefixed tag to package
+        required: true
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive: tar.gz
+          - runner: macos-13
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            archive: zip
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+          targets: ${{ matrix.target }}
+      - name: Verify release candidate
+        run: cargo test --workspace --locked
+      - name: Build binary
+        run: cargo build --release --locked --bin spectra --target ${{ matrix.target }}
+      - name: Package Unix binary
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          mkdir -p dist/package
+          cp target/${{ matrix.target }}/release/spectra dist/package/spectra
+          cp README.md LICENSE dist/package/
+          tar -C dist/package -czf dist/spectra-${{ matrix.target }}.tar.gz .
+      - name: Package Windows binary
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/package | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/spectra.exe dist/package/
+          Copy-Item README.md,LICENSE dist/package/
+          Compress-Archive -Path dist/package/* -DestinationPath dist/spectra-${{ matrix.target }}.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spectra-${{ matrix.target }}
+          path: dist/spectra-*
+          if-no-files-found: error
+
+  release:
+    name: Sign and publish
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum spectra-* > SHA256SUMS
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign artifacts with Sigstore
+        working-directory: dist
+        run: |
+          for artifact in spectra-* SHA256SUMS; do
+            cosign sign-blob --yes --bundle "${artifact}.sigstore.json" "$artifact"
+          done
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/spectra-*
+      - name: Render package-manager manifests
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: packaging/render-manifests.sh "$RELEASE_TAG" dist/SHA256SUMS dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/*
+
+  publish-manifests:
+    name: Publish Homebrew and Scoop manifests
+    needs: release
+    runs-on: ubuntu-24.04
+    env:
+      PACKAGE_REPOSITORIES_TOKEN: ${{ secrets.PACKAGE_REPOSITORIES_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Regenerate manifests
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          (cd dist && sha256sum spectra-* > SHA256SUMS)
+          packaging/render-manifests.sh "$RELEASE_TAG" dist/SHA256SUMS dist
+      - name: Publish manifests
+        if: env.PACKAGE_REPOSITORIES_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ secrets.PACKAGE_REPOSITORIES_TOKEN }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          publish_manifest() {
+            repository=$1
+            path=$2
+            file=$3
+            sha=$(gh api "repos/$repository/contents/$path" --jq .sha 2>/dev/null || true)
+            if [ -n "$sha" ]; then
+              gh api --method PUT "repos/$repository/contents/$path" \
+                -f message="chore: update Spectra ${RELEASE_TAG}" \
+                -f content="$(base64 -w0 "$file")" \
+                -f sha="$sha"
+            else
+              gh api --method PUT "repos/$repository/contents/$path" \
+                -f message="chore: update Spectra ${RELEASE_TAG}" \
+                -f content="$(base64 -w0 "$file")"
+            fi
+          }
+          publish_manifest rankupgames/homebrew-tap Formula/spectra.rb dist/spectra.rb
+          publish_manifest rankupgames/scoop-bucket bucket/spectra.json dist/spectra.json

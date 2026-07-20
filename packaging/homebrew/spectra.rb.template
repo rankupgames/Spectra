@@ -1,0 +1,34 @@
+class Spectra < Formula
+  desc "Token-efficient code context runtime for local AI agents"
+  homepage "https://github.com/rankupgames/Spectra"
+  version "@VERSION@"
+  license "MIT"
+
+  on_macos do
+    if Hardware::CPU.arm?
+      url "https://github.com/rankupgames/Spectra/releases/download/@TAG@/spectra-aarch64-apple-darwin.tar.gz"
+      sha256 "@MACOS_ARM64_SHA@"
+    else
+      url "https://github.com/rankupgames/Spectra/releases/download/@TAG@/spectra-x86_64-apple-darwin.tar.gz"
+      sha256 "@MACOS_X64_SHA@"
+    end
+  end
+
+  on_linux do
+    if Hardware::CPU.arm?
+      url "https://github.com/rankupgames/Spectra/releases/download/@TAG@/spectra-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "@LINUX_ARM64_SHA@"
+    else
+      url "https://github.com/rankupgames/Spectra/releases/download/@TAG@/spectra-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "@LINUX_X64_SHA@"
+    end
+  end
+
+  def install
+    bin.install "spectra"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/spectra --version")
+  end
+end
