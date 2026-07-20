@@ -380,26 +380,29 @@ fn execute_tool(
     name: &str,
     arguments: &Value,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let output = match name {
-        "search_code" if arm == ArmKind::Baseline => {
-            search_code(repository, string_argument(arguments, "query")?)?
+    let output = (|| -> Result<String, Box<dyn std::error::Error>> {
+        match name {
+            "search_code" if arm == ArmKind::Baseline => {
+                search_code(repository, string_argument(arguments, "query")?)
+            }
+            "read_source" => read_source(
+                repository,
+                string_argument(arguments, "path")?,
+                integer_argument(arguments, "start", 1),
+                integer_argument(arguments, "end", 120),
+            ),
+            "spectra_context" if arm == ArmKind::Spectra => spectra_context(
+                args,
+                repository,
+                task,
+                string_argument(arguments, "query")?,
+                string_argument(arguments, "intent").unwrap_or("auto"),
+                "delta",
+            ),
+            _ => Ok(format!("tool_error unsupported tool {name}")),
         }
-        "read_source" => read_source(
-            repository,
-            string_argument(arguments, "path")?,
-            integer_argument(arguments, "start", 1),
-            integer_argument(arguments, "end", 120),
-        )?,
-        "spectra_context" if arm == ArmKind::Spectra => spectra_context(
-            args,
-            repository,
-            task,
-            string_argument(arguments, "query")?,
-            string_argument(arguments, "intent").unwrap_or("auto"),
-            "delta",
-        )?,
-        _ => format!("tool_error unsupported tool {name}"),
-    };
+    })()
+    .unwrap_or_else(|error| format!("tool_error {name} failed: {error}"));
     Ok(bound_text(output, MAX_TOOL_OUTPUT))
 }
 
@@ -946,5 +949,32 @@ mod tests {
                 .unwrap()
                 .contains("outside")
         );
+    }
+
+    #[test]
+    fn ordinary_missing_source_is_returned_to_the_model_as_a_tool_error() {
+        let args = Args::parse_from([
+            "test",
+            "--corpus-root",
+            "/tmp/corpus",
+            "--output",
+            "/tmp/output",
+        ]);
+        let task = ExpandedTask {
+            id: "task".into(),
+            repository: "repo".into(),
+            category: "navigation".into(),
+            prompt: "locate".into(),
+        };
+        let output = execute_tool(
+            &args,
+            &std::env::temp_dir(),
+            &task,
+            ArmKind::Baseline,
+            "read_source",
+            &json!({"path":"definitely-missing.rs","start":1,"end":10}),
+        )
+        .unwrap();
+        assert!(output.starts_with("tool_error read_source failed:"));
     }
 }
