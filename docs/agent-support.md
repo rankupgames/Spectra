@@ -7,15 +7,18 @@ Spectra keeps agent-specific setup behind small adapters. The topology engine an
 | Agent | Global configuration | MCP schema | Capability |
 | --- | --- | --- | --- |
 | Claude Code | `~/.claude.json` and `~/.claude/settings.json` | `mcpServers.spectra` plus lifecycle hooks | `topology+ledger` |
+| Claude Desktop | platform application-data `Claude/claude_desktop_config.json` | `mcpServers.spectra` | Topology |
 | Cursor | `~/.cursor/mcp.json` and `~/.cursor/hooks.json` | `mcpServers.spectra` plus lifecycle hooks | `topology+ledger-partial` |
-| Codex | `codex mcp` and `~/.codex/hooks.json` | CLI-managed stdio server plus lifecycle hooks | `topology+ledger` |
+| Codex CLI/Desktop | `~/.codex/config.toml` and `~/.codex/hooks.json` | stdio server plus lifecycle hooks | `topology+ledger` |
 | OpenCode | `$XDG_CONFIG_HOME/opencode/opencode.json` | `mcp.spectra`, local command array | Topology |
 | Hermes Agent | `$HERMES_HOME/config.yaml` | `mcp_servers.spectra` | Topology |
-| Gemini CLI | `~/.gemini/settings.json` | `mcpServers.spectra` plus lifecycle hooks | `topology+ledger` |
+| Gemini CLI/Code Assist (VS Code) | `~/.gemini/settings.json` | `mcpServers.spectra` plus lifecycle hooks | `topology+ledger` |
 | Antigravity | `~/.gemini/config/mcp_config.json` | `mcpServers.spectra` | Topology |
 | Kiro | `~/.kiro/settings/mcp.json` | `mcpServers.spectra` | Topology |
 
 Run `spectra install` in a TTY for a guided scan, target/location choice, conflict preflight, confirmation, and final capability report. Use `--agent <name>` for one agent, `--agent all` to attempt every adapter, or `--yes` for unattended detected-target installation with global defaults. Non-interactive input requires an explicit target or `--yes` and never waits for prompts. A failure in one target is reported without preventing the other selected targets from being processed.
+
+Claude Desktop is selected explicitly with `--agent claude-desktop` because it has a separate configuration file. Codex Desktop and Gemini Code Assist for VS Code share their respective CLI configurations, so `codex-desktop`, `gemini-desktop`, and `gemini-code-assist` are accepted aliases. The installer detects Codex and Claude desktop installations on macOS, Windows, and Linux, plus the VS Code Gemini Code Assist extension. An existing shared configuration also counts as detection. Claude Desktop receives topology only because its standalone MCP surface does not expose the verified coding-agent lifecycle hooks.
 
 Codex, Claude Code, Gemini CLI, and Cursor also support `--location local --path <repo>` through their documented project configuration layers. Codex uses `.codex/config.toml` and `.codex/hooks.json`; Claude uses `.mcp.json` and `.claude/settings.json`; Gemini uses `.gemini/settings.json`; Cursor uses `.cursor/mcp.json` and `.cursor/hooks.json`. Unsupported local combinations are rejected before mutation.
 
@@ -45,6 +48,7 @@ Any other harness can integrate through the stable [`spectra lifecycle ingest` J
 
 - [Claude Code MCP](https://code.claude.com/docs/en/mcp)
 - [Claude Code hooks](https://code.claude.com/docs/en/hooks)
+- [Claude Desktop local MCP servers](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop)
 - [Cursor MCP](https://docs.cursor.com/context/model-context-protocol)
 - [Cursor hooks](https://cursor.com/docs/hooks)
 - [OpenCode configuration](https://dev.opencode.ai/docs/config)

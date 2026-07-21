@@ -20,8 +20,9 @@ pub(crate) struct Report {
     pub errors: Vec<String>,
 }
 
-const TARGETS: [Agent; 8] = [
+const TARGETS: [Agent; 9] = [
     Agent::Claude,
+    Agent::ClaudeDesktop,
     Agent::Cursor,
     Agent::Codex,
     Agent::OpenCode,
@@ -38,10 +39,14 @@ pub(crate) enum Agent {
     /// Configure every supported agent, even when it is not detected.
     All,
     Claude,
+    /// Configure the standalone Claude desktop application.
+    ClaudeDesktop,
     Cursor,
+    #[value(alias = "codex-desktop")]
     Codex,
     OpenCode,
     Hermes,
+    #[value(alias = "gemini-desktop", alias = "gemini-code-assist")]
     Gemini,
     Antigravity,
     Kiro,
@@ -208,10 +213,13 @@ fn install_one(
         Agent::Codex if location == Location::Local => {
             local::install_codex(project, dry_run, topology_only)
         }
-        Agent::Codex if topology_only => {
+        Agent::Codex if topology_only && codex_cli_available() => {
             Ok(crate::install::install_codex_topology_only(dry_run)?.to_string())
         }
-        Agent::Codex => Ok(crate::install::install_codex(dry_run)?.to_string()),
+        Agent::Codex if codex_cli_available() => {
+            Ok(crate::install::install_codex(dry_run)?.to_string())
+        }
+        Agent::Codex => local::install_codex_global(dry_run, topology_only),
         Agent::OpenCode => jsonc::install(dry_run),
         Agent::Hermes => hermes::install(dry_run),
         agent => {
@@ -290,7 +298,10 @@ fn uninstall_one(
     }
     match agent {
         Agent::Codex if location == Location::Local => local::uninstall_codex(project, dry_run),
-        Agent::Codex => Ok(crate::install::uninstall_codex(dry_run)?.to_string()),
+        Agent::Codex if codex_cli_available() => {
+            Ok(crate::install::uninstall_codex(dry_run)?.to_string())
+        }
+        Agent::Codex => local::uninstall_codex_global(dry_run),
         Agent::OpenCode => jsonc::uninstall(dry_run),
         Agent::Hermes => hermes::uninstall(dry_run),
         agent => {
@@ -326,7 +337,8 @@ fn uninstall_one(
 
 fn status_one(agent: Agent) -> Result<String, BoxError> {
     match agent {
-        Agent::Codex => crate::install::codex_status(),
+        Agent::Codex if codex_cli_available() => crate::install::codex_status(),
+        Agent::Codex => local::codex_global_status(),
         Agent::OpenCode => jsonc::status(),
         Agent::Hermes => hermes::status(),
         agent => {
@@ -396,7 +408,7 @@ fn hook_target(
             events: CLAUDE_HOOK_EVENTS,
         },
         Agent::Gemini => hooks::HookTarget {
-            label: "Gemini CLI",
+            label: "Gemini CLI/Code Assist (VS Code)",
             agent: "gemini",
             path: if location == Location::Local {
                 project.join(".gemini/settings.json")
@@ -439,6 +451,12 @@ fn json_target(agent: Agent, location: Location, project: &Path) -> Result<JsonT
             },
             args: STDIO_ARGS,
         },
+        Agent::ClaudeDesktop => JsonTarget {
+            label: "Claude Desktop",
+            root_key: "mcpServers",
+            path: claude_desktop_path()?,
+            args: STDIO_ARGS,
+        },
         Agent::Cursor => JsonTarget {
             label: "Cursor",
             root_key: "mcpServers",
@@ -454,7 +472,7 @@ fn json_target(agent: Agent, location: Location, project: &Path) -> Result<JsonT
             },
         },
         Agent::Gemini => JsonTarget {
-            label: "Gemini CLI",
+            label: "Gemini CLI/Code Assist (VS Code)",
             root_key: "mcpServers",
             path: if location == Location::Local {
                 project.join(".gemini/settings.json")
@@ -485,11 +503,12 @@ fn label(agent: Agent) -> &'static str {
         Agent::Auto => "Automatic detection",
         Agent::All => "All agents",
         Agent::Claude => "Claude Code",
+        Agent::ClaudeDesktop => "Claude Desktop",
         Agent::Cursor => "Cursor",
-        Agent::Codex => "Codex",
+        Agent::Codex => "Codex CLI/Desktop",
         Agent::OpenCode => "OpenCode",
         Agent::Hermes => "Hermes Agent",
-        Agent::Gemini => "Gemini CLI",
+        Agent::Gemini => "Gemini CLI/Code Assist (VS Code)",
         Agent::Antigravity => "Antigravity",
         Agent::Kiro => "Kiro",
     }
@@ -501,11 +520,17 @@ fn detected(agent: Agent) -> bool {
             env::var_os("SPECTRA_CODEX_BIN").is_some()
                 || command_exists("codex")
                 || home_path(".codex").is_some_and(|path| path.exists())
+                || desktop_app_exists("Codex")
         }
         Agent::Claude => {
             command_exists("claude")
                 || claude_path().is_ok_and(|path| path.exists())
                 || home_path(".claude").is_some_and(|path| path.exists())
+        }
+        Agent::ClaudeDesktop => {
+            env::var_os("SPECTRA_CLAUDE_DESKTOP_CONFIG").is_some()
+                || claude_desktop_path().is_ok_and(|path| path.exists())
+                || desktop_app_exists("Claude")
         }
         Agent::Cursor => {
             command_exists("cursor")
@@ -517,7 +542,11 @@ fn detected(agent: Agent) -> bool {
             command_exists("opencode") || jsonc::path().is_ok_and(|path| path.exists())
         }
         Agent::Hermes => command_exists("hermes") || hermes::path().is_ok_and(|path| path.exists()),
-        Agent::Gemini => command_exists("gemini") || gemini_path().is_ok_and(|path| path.exists()),
+        Agent::Gemini => {
+            command_exists("gemini")
+                || gemini_path().is_ok_and(|path| path.exists())
+                || gemini_desktop_detected()
+        }
         Agent::Antigravity => {
             command_exists("agy")
                 || command_exists("antigravity")
@@ -600,6 +629,28 @@ fn claude_path() -> Result<PathBuf, BoxError> {
     configured_path("SPECTRA_CLAUDE_CONFIG", ".claude.json")
 }
 
+fn claude_desktop_path() -> Result<PathBuf, BoxError> {
+    if let Some(path) = env::var_os("SPECTRA_CLAUDE_DESKTOP_CONFIG") {
+        return Ok(PathBuf::from(path));
+    }
+    #[cfg(target_os = "macos")]
+    return home_path("Library/Application Support/Claude/claude_desktop_config.json")
+        .ok_or_else(|| "unable to locate the user home directory".into());
+    #[cfg(windows)]
+    return env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .map(|path| path.join("Claude/claude_desktop_config.json"))
+        .ok_or_else(|| "unable to locate the roaming application data directory".into());
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        let base = env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home_path(".config"))
+            .ok_or("unable to locate the user configuration directory")?;
+        Ok(base.join("Claude/claude_desktop_config.json"))
+    }
+}
+
 fn cursor_path() -> Result<PathBuf, BoxError> {
     configured_path("SPECTRA_CURSOR_CONFIG", ".cursor/mcp.json")
 }
@@ -636,5 +687,61 @@ fn command_exists(command: &str) -> bool {
         }
         #[cfg(not(windows))]
         false
+    })
+}
+
+fn codex_cli_available() -> bool {
+    env::var_os("SPECTRA_CODEX_BIN").is_some() || command_exists("codex")
+}
+
+fn desktop_app_exists(name: &str) -> bool {
+    if env::var_os(format!("SPECTRA_{}_DESKTOP", name.to_ascii_uppercase())).is_some() {
+        return true;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Path::new("/Applications")
+            .join(format!("{name}.app"))
+            .exists()
+            || home_path("Applications")
+                .is_some_and(|path| path.join(format!("{name}.app")).exists())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        #[cfg(windows)]
+        {
+            let executable = format!("{name}.exe");
+            return env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .is_some_and(|path| {
+                    path.join("Programs").join(name).join(&executable).exists()
+                        || path.join(name).join(&executable).exists()
+                });
+        }
+        #[cfg(not(windows))]
+        {
+            let desktop_file = format!("{}.desktop", name.to_ascii_lowercase());
+            Path::new("/usr/share/applications")
+                .join(&desktop_file)
+                .exists()
+                || home_path(".local/share/applications")
+                    .is_some_and(|path| path.join(desktop_file).exists())
+        }
+    }
+}
+
+fn gemini_desktop_detected() -> bool {
+    if env::var_os("SPECTRA_GEMINI_DESKTOP").is_some() {
+        return true;
+    }
+    home_path(".vscode/extensions").is_some_and(|path| {
+        fs::read_dir(path).is_ok_and(|entries| {
+            entries.filter_map(Result::ok).any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("google.geminicodeassist")
+            })
+        })
     })
 }
