@@ -3,7 +3,7 @@
 **An adaptive context runtime for local AI coding agents.**
 
 [![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-CE412B?logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![Version: 0.4.0](https://img.shields.io/badge/Version-0.4.0-38BDF8.svg)](https://github.com/rankupgames/Spectra/releases/tag/v0.4.0)
+[![Version: 0.4.1](https://img.shields.io/badge/Version-0.4.1-38BDF8.svg)](https://github.com/rankupgames/Spectra/releases/tag/v0.4.1)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22C55E.svg)](LICENSE)
 [![Status: Prototype](https://img.shields.io/badge/Status-Prototype-F59E0B.svg)](#project-status)
 
@@ -20,7 +20,7 @@ Agent lifecycle ──adapter hooks──▶ immutable ledger ──▶ bounded 
 Instead of dumping source up front, Spectra lets the model see the shape of the system, choose an exact `path:start-end` anchor, and read code once it knows what it is looking for.
 
 > [!IMPORTANT]
-> Spectra is an early prototype. The v0.4 runtime retains the complete CodeGraph v1.3.0 language and extension surface with 39 adapters. The harness-neutral Ledger is verified for Codex, Claude Code, and Gemini CLI; Cursor support is intentionally partial because it can reinject continuity only at session start. See [Project status](#project-status) before relying on it in production.
+> Spectra is an early prototype. The v0.4 runtime supports 39 language and dialect adapters. The harness-neutral Ledger is verified for Codex, Claude Code, and Gemini CLI; Cursor support is intentionally partial because it can reinject continuity only at session start. See [Project status](#project-status) before relying on it in production.
 
 The [agent support contract](docs/agent-support.md) tracks topology and Ledger support separately so an MCP integration is never mistaken for lifecycle coverage.
 
@@ -41,7 +41,7 @@ Most code-context tools answer with source and explanation together. That can be
 | --- | ---: |
 | Median provider-input reduction | **88.3%** |
 | Composite recall-proxy retention | **118.0%** |
-| Expected-anchor recall | **85.2%** (CodeGraph: 68.5%) |
+| Expected-anchor recall | **85.2%** (reference arm: 68.5%) |
 | Ledger median estimated-token reduction | **93.4%** |
 | Ledger fact retention | **100%** |
 | Maximum Ledger projection | **57 tokens** |
@@ -52,7 +52,7 @@ These numbers come from nine frozen prompts across pinned ripgrep, Tokio, and ru
 
 ### Requirements
 
-- At least one supported local agent: Claude Code, Cursor, Codex, OpenCode, Hermes Agent, Gemini CLI, Antigravity, or Kiro
+- At least one supported local agent: Claude Code, Claude Desktop, Cursor, Codex CLI/Desktop, OpenCode, Hermes Agent, Gemini CLI/Code Assist for VS Code, Antigravity, or Kiro
 - A repository containing at least one supported source language
 
 Any MCP client can also run `spectra serve --mcp` manually.
@@ -62,13 +62,13 @@ Any MCP client can also run `spectra serve --mcp` manually.
 macOS and Linux:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/rankupgames/Spectra/v0.4.0/install.sh | sh
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/rankupgames/Spectra/v0.4.1/install.sh | sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/rankupgames/Spectra/v0.4.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/rankupgames/Spectra/v0.4.1/install.ps1 | iex
 ```
 
 Package-manager and source-install alternatives:
@@ -77,7 +77,7 @@ Package-manager and source-install alternatives:
 brew install rankupgames/tap/spectra
 scoop bucket add rankupgames https://github.com/rankupgames/scoop-bucket
 scoop install rankupgames/spectra
-cargo install --git https://github.com/rankupgames/Spectra.git --tag v0.4.0 --bin spectra --locked
+cargo install --git https://github.com/rankupgames/Spectra.git --tag v0.4.1 --bin spectra --locked
 ```
 
 Cargo installation requires Rust 1.88 or newer. Every release archive is covered by the published `SHA256SUMS`, Sigstore bundle, and build provenance; both direct installers verify the archive checksum before installing it.
@@ -100,9 +100,10 @@ Expected output:
 
 ```text
 Claude Code: MCP=current, Ledger hooks=current, Capability=topology+ledger
-Codex: MCP=current, Ledger hooks=current, Capability=topology+ledger
+Claude Desktop: MCP=current, Ledger=not available, Capability=topology
+Codex CLI/Desktop: MCP=current, Ledger hooks=current, Capability=topology+ledger
 Cursor: MCP=current, Ledger hooks=current, Capability=topology+ledger-partial
-Gemini CLI: MCP=current, Ledger hooks=current, Capability=topology+ledger
+Gemini CLI/Code Assist (VS Code): MCP=current, Ledger hooks=current, Capability=topology+ledger
 ```
 
 Your output only lists the agents Spectra detected. Codex, Claude Code, and Gemini CLI have recorded-wire `topology+ledger` coverage. Cursor is visibly labeled `topology+ledger-partial`: it records lifecycle facts but can reinject context only at `sessionStart`, not before every prompt.
@@ -194,7 +195,7 @@ spectra hook [--agent codex|claude|gemini|cursor]
 
 On filesystems where native recursive watching is unavailable or unreliable, `spectra autosync install` adds marked blocks to the repository's `post-commit`, `post-merge`, and `post-checkout` hooks. Each hook launches `spectra sync --quiet` in the background. Installation is idempotent, honors Git's resolved hooks directory, preserves existing hook bodies, and `spectra autosync remove` deletes only Spectra-owned blocks.
 
-`--agent auto` is the default and configures every detected agent. `--agent all` attempts every adapter; agents that expose configuration only through their own CLI must already be installed. Non-interactive use requires an explicit `--agent` or `--yes`, so it never waits for wizard input. Verified local configuration is available for Codex, Claude Code, Gemini CLI, and Cursor.
+`--agent auto` is the default and configures every detected agent. `--agent all` attempts every adapter. `claude-desktop` is a distinct target because Claude Desktop has its own configuration; `codex-desktop` and `gemini-desktop` are accepted aliases for the shared Codex and Gemini Code Assist for VS Code configurations. Codex Desktop can be configured even when the Codex CLI is absent. Non-interactive use requires an explicit `--agent` or `--yes`, so it never waits for wizard input. Verified project-local configuration is available for Codex, Claude Code, Gemini CLI, and Cursor.
 
 The installer is idempotent and ownership-aware: it updates stale Spectra registrations, preserves unrelated settings and comments, writes configuration atomically, and refuses to overwrite or remove a foreign MCP entry named `spectra`.
 
@@ -263,9 +264,9 @@ The internal graph kernel is domain-neutral:
 - adjacency indexes and invariant validation
 - code-specific `SourceSpan` data kept in a separate sidecar
 
-Every adapter maps parser-backed or structured extraction into the same graph vocabulary. The current v0.2 packs cover the complete CodeGraph v1.3.0 language surface, including structural symbols, imports, calls, inheritance, implementations, configuration references, templates, infrastructure blocks, and legacy execution edges where applicable. Web components additionally parse embedded JavaScript or TypeScript, connect template events to script handlers, resolve rendered components, and model SvelteKit, Nuxt, Astro, Razor, Drupal, and ArkUI routes. Native adapters connect Objective-C interfaces, protocols, implementations, and message sends, and distinguish CUDA and Metal entry-point kernels from ordinary functions. Structured adapters cover Terraform/OpenTofu, Nix, YAML, XML/MyBatis, properties, Twig, CFML queries, and COBOL/CICS. Ambiguous targets remain explicit uncertain boundaries. Rendering condenses cycles, layers nodes, clusters related code, routes typed edges, and emits deterministic SVG and PNG artifacts.
+Every adapter maps parser-backed or structured extraction into the same graph vocabulary. The current v0.2 packs cover 39 language and dialect adapters, including structural symbols, imports, calls, inheritance, implementations, configuration references, templates, infrastructure blocks, and legacy execution edges where applicable. Web components additionally parse embedded JavaScript or TypeScript, connect template events to script handlers, resolve rendered components, and model SvelteKit, Nuxt, Astro, Razor, Drupal, and ArkUI routes. Native adapters connect Objective-C interfaces, protocols, implementations, and message sends, and distinguish CUDA and Metal entry-point kernels from ordinary functions. Structured adapters cover Terraform/OpenTofu, Nix, YAML, XML/MyBatis, properties, Twig, CFML queries, and COBOL/CICS. Ambiguous targets remain explicit uncertain boundaries. Rendering condenses cycles, layers nodes, clusters related code, routes typed edges, and emits deterministic SVG and PNG artifacts.
 
-The adapter contract, functional acceptance bar, and CodeGraph parity matrix are tracked in [Code adapters](docs/code-adapters.md).
+The adapter contract and functional acceptance bar are tracked in [Code adapters](docs/code-adapters.md).
 
 See the [Ledger design and maintenance boundaries](docs/state-machine-ledger.md) for the state-machine contract.
 
@@ -302,15 +303,15 @@ The benchmark protocol, frozen prompts, raw evaluation data, and replay fixtures
 
 Implemented:
 
-- adapter-driven topology extraction and incremental indexing across all 39 CodeGraph v1.3.0 language families and dialect adapters
-- CodeGraph-parity server framework routes plus React/Next, SwiftUI, React Native, Expo Module, and Fabric client/native bridges
+- adapter-driven topology extraction and incremental indexing across all 39 supported language families and dialect adapters
+- server framework routes plus React/Next, SwiftUI, React Native, Expo Module, and Fabric client/native bridges
 - embedded JavaScript/TypeScript bridges, component rendering and event bindings, and conventional SvelteKit, Nuxt, and Astro page routes
 - query-focused deterministic PNG and SVG rendering
 - budgeted Context Packet v1 responses with deterministic intent routing, atomic evidence packing, bounded source windows, stale-safe continuation cursors, and explicit-only maps
 - session-durable evidence deduplication with hashed receipts, bounded LRU storage, concurrent writers, corruption recovery, and fail-open delivery
 - local privacy-safe efficiency metrics with opt-out, inspection, and explicit reset
-- the complete CodeGraph v1.3.0 MCP query capability set, with `spectra_context` as the one-tool default and all twelve v0.3 tools behind compatible allowlists
-- automatic MCP installation for Claude Code, Cursor, Codex, OpenCode, Hermes Agent, Gemini CLI, Antigravity, and Kiro
+- the complete v0.3 MCP query capability set, with `spectra_context` as the one-tool default and all twelve legacy tools behind compatible allowlists
+- automatic MCP installation for Claude Code, Claude Desktop, Cursor, Codex CLI/Desktop, OpenCode, Hermes Agent, Gemini CLI/Code Assist for VS Code, Antigravity, and Kiro
 - automatic lifecycle-hook installation for Codex, Claude Code, Gemini CLI, and Cursor
 - append-only, per-session State Machine Ledger with replay, recovery, redaction, concurrency control, cross-harness project facts, and bounded projection
 - stable harness-neutral `spectra lifecycle ingest` JSON v1 protocol

@@ -460,6 +460,7 @@ fn standard_json_agent_installers_are_owned_idempotent_and_reversible() {
     let binary = env!("CARGO_BIN_EXE_spectra");
     let targets = [
         ("claude", "SPECTRA_CLAUDE_CONFIG"),
+        ("claude-desktop", "SPECTRA_CLAUDE_DESKTOP_CONFIG"),
         ("cursor", "SPECTRA_CURSOR_CONFIG"),
         ("gemini", "SPECTRA_GEMINI_CONFIG"),
         ("antigravity", "SPECTRA_ANTIGRAVITY_CONFIG"),
@@ -553,6 +554,116 @@ fn standard_json_agent_installers_are_owned_idempotent_and_reversible() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("refusing to overwrite"));
     assert_eq!(fs::read_to_string(conflict).unwrap(), original);
 
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn codex_desktop_installs_without_the_codex_cli() {
+    let root = fixture();
+    let codex_home = root.join(".codex");
+    let output = Command::new(env!("CARGO_BIN_EXE_spectra"))
+        .args(["install", "--agent", "codex-desktop"])
+        .env("PATH", &root)
+        .env("SPECTRA_CODEX_HOME", &codex_home)
+        .env("SPECTRA_CODEX_DESKTOP", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let config = fs::read_to_string(codex_home.join("config.toml")).unwrap();
+    assert!(config.contains("[mcp_servers.spectra]"));
+    assert!(config.contains("# >>> spectra managed MCP >>>"));
+    assert!(codex_home.join("hooks.json").exists());
+
+    let status = Command::new(env!("CARGO_BIN_EXE_spectra"))
+        .args(["status", "--agent", "codex-desktop"])
+        .env("PATH", &root)
+        .env("SPECTRA_CODEX_HOME", &codex_home)
+        .output()
+        .unwrap();
+    assert!(status.status.success());
+    assert!(String::from_utf8_lossy(&status.stdout).contains("MCP=current"));
+
+    let removed = Command::new(env!("CARGO_BIN_EXE_spectra"))
+        .args(["uninstall", "--agent", "codex-desktop"])
+        .env("PATH", &root)
+        .env("SPECTRA_CODEX_HOME", &codex_home)
+        .output()
+        .unwrap();
+    assert!(removed.status.success());
+    assert!(
+        !fs::read_to_string(codex_home.join("config.toml"))
+            .unwrap()
+            .contains("[mcp_servers.spectra]")
+    );
+
+    fs::write(
+        codex_home.join("config.toml"),
+        "[mcp_servers.spectra]\ncommand = \"/old/spectra\"\nargs = [\"serve\", \"--mcp\"]\n\n[unrelated]\nkeep = true\n",
+    )
+    .unwrap();
+    let migrated = Command::new(env!("CARGO_BIN_EXE_spectra"))
+        .args(["install", "--agent", "codex-desktop"])
+        .env("PATH", &root)
+        .env("SPECTRA_CODEX_HOME", &codex_home)
+        .output()
+        .unwrap();
+    assert!(migrated.status.success());
+    let migrated = fs::read_to_string(codex_home.join("config.toml")).unwrap();
+    assert!(migrated.contains("# >>> spectra managed MCP >>>"));
+    assert!(migrated.contains("[unrelated]"));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn gemini_desktop_alias_uses_the_shared_code_assist_config() {
+    let root = fixture();
+    let config = root.join("gemini.json");
+    fs::write(&config, "{}\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_spectra"))
+        .args(["install", "--agent", "gemini-desktop", "--topology-only"])
+        .env("SPECTRA_GEMINI_CONFIG", &config)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+    assert!(value["mcpServers"]["spectra"].is_object());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn auto_detects_desktop_install_targets() {
+    let root = fixture();
+    let claude = root.join("claude-desktop.json");
+    let codex_home = root.join("codex-home");
+    let gemini = root.join("gemini.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_spectra"))
+        .args(["install", "--yes", "--topology-only"])
+        .env("PATH", &root)
+        .env("SPECTRA_HOME", &root)
+        .env("SPECTRA_CLAUDE_DESKTOP_CONFIG", &claude)
+        .env("SPECTRA_CODEX_DESKTOP", "1")
+        .env("SPECTRA_CODEX_HOME", &codex_home)
+        .env("SPECTRA_GEMINI_DESKTOP", "1")
+        .env("SPECTRA_GEMINI_CONFIG", &gemini)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Claude Desktop:"));
+    assert!(stdout.contains("Codex CLI/Desktop:"));
+    assert!(stdout.contains("Gemini CLI/Code Assist (VS Code):"));
+    assert!(claude.exists());
+    assert!(codex_home.join("config.toml").exists());
+    assert!(gemini.exists());
     fs::remove_dir_all(root).unwrap();
 }
 

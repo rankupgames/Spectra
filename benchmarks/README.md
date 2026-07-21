@@ -1,8 +1,8 @@
-# Comparative encoding benchmark: Spectra and CodeGraph
+# Comparative encoding benchmark
 
-CodeGraph is used here as a mature, source-rich local graph reference. This benchmark asks whether Spectra's visual-topology encoding can reduce model input while preserving enough architecture and navigation quality to justify further research. It is not intended as a general ranking of the two projects.
+A mature, source-rich local graph tool is used as the reference arm. This benchmark asks whether Spectra's visual-topology encoding can reduce model input while preserving enough architecture and navigation quality to justify further research. It is not intended as a general product ranking.
 
-Spectra's internal prototype gate is at least 50% fewer median model input tokens than the `codegraph_explore` reference arm while retaining at least 90% of that arm's architecture/navigation task score.
+Spectra's internal prototype gate is at least 50% fewer median model input tokens than the reference arm while retaining at least 90% of that arm's architecture/navigation task score.
 
 ## Corpus
 
@@ -12,14 +12,14 @@ Use pinned commits of three Rust repositories representing different scales:
 2. tokio
 3. rust-analyzer
 
-Record every repository URL and exact commit SHA beside the result. Run `codegraph init` and `spectra init` from the same clean checkout.
+Record every repository URL and exact commit SHA beside the result. Initialize both tools from the same clean checkout.
 
 ## Procedure
 
 For each prompt in `prompts.json`:
 
 1. Start a fresh conversation using the same multimodal model, system prompt, temperature, and maximum output tokens.
-2. CodeGraph arm: allow `codegraph_explore` and ordinary targeted reads.
+2. Reference arm: allow the reference graph query and ordinary targeted reads.
 3. Spectra arm: allow `spectra_map` and ordinary targeted reads.
 4. Record provider-reported input tokens, output tokens, image settings, tool calls, wall time, returned payload bytes, and final answer.
 5. Grade expected architecture concepts and expected source anchors blind to the arm.
@@ -36,13 +36,12 @@ cargo build --release --workspace
   --manifest benchmarks/prompts.json \
   --corpus-root /path/to/pinned/corpus \
   --output benchmarks/results/run-name \
-  --codegraph-bin /path/to/codegraph \
   --spectra-bin /path/to/spectra \
   --reindex \
   --repeats 3
 ```
 
-The runner verifies commit SHAs, records tool versions and cold indexing times, performs repeated warm queries, saves every raw CodeGraph response and Spectra image, estimates text-only tokens at four characters per token, and computes expected-anchor path recall. The estimate deliberately excludes vision tokens; only provider-reported usage can complete the final comparison.
+The runner verifies commit SHAs, records tool versions and cold indexing times, performs repeated warm queries, saves every raw reference response and Spectra image, estimates text-only tokens at four characters per token, and computes expected-anchor path recall. The estimate deliberately excludes vision tokens; only provider-reported usage can complete the final comparison. Use the runner's `--help` output for the internal reference-binary flag name.
 
 Generated reports are written under `benchmarks/results/`. That directory is intentionally ignored by Git; publish selected results separately when they have been reviewed for release.
 
@@ -55,11 +54,10 @@ cargo run --release -p spectra-context --bin spectra-adapter-eval -- \
   --manifest benchmarks/adapter-repositories.json \
   --corpus-root /path/to/adapter-corpus \
   --output benchmarks/results/adapter-parity \
-  --codegraph-bin /path/to/codegraph \
   --reindex
 ```
 
-The runner verifies every commit, rebuilds both indexes, compares the complete CodeGraph route-label set with Spectra, requires the pinned minimum Spectra route count, measures resolved Spectra route edges, and exits nonzero on a gap. Additional Spectra routes are reported rather than treated as failures because the reference may detect no routes in a framework it otherwise recognizes. The reviewed v0.2 baseline is recorded in [`v0.2-baseline.md`](v0.2-baseline.md).
+The runner verifies every commit, rebuilds both indexes, compares the complete reference route-label set with Spectra, requires the pinned minimum Spectra route count, measures resolved Spectra route edges, and exits nonzero on a gap. Additional Spectra routes are reported rather than treated as failures because the reference may detect no routes in a framework it otherwise recognizes. The reviewed v0.2 baseline is recorded in [`v0.2-baseline.md`](v0.2-baseline.md). Use the runner's `--help` output for its internal reference-binary flag name.
 
 ## State Machine Ledger benchmark
 

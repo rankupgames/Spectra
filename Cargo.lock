@@ -1223,7 +1223,7 @@ checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
 name = "spectra-context"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "atomic-write-file",
  "base64",
@@ -1242,7 +1242,7 @@ dependencies = [
 
 [[package]]
 name = "spectra-context-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "atomic-write-file",
  "ignore",
@@ -1276,7 +1276,7 @@ dependencies = [
 
 [[package]]
 name = "spectra-context-render"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "resvg",
  "spectra-context-core",

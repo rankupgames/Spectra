@@ -861,7 +861,7 @@ impl SpectraServer {
 
 #[tool_handler(
     name = "spectra",
-    version = "0.4.0",
+    version = "0.4.1",
     instructions = "Use spectra_context for budgeted, text-first code context. Request representation=map explicitly when a visual topology is worth provider image tokens. Legacy focused tools remain available through SPECTRA_MCP_TOOLS."
 )]
 impl ServerHandler for SpectraServer {
