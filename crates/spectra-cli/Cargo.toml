@@ -6,9 +6,9 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Token-efficient visual code topology and context ledger for local AI agents"
+description = "Local-first MCP server and CLI for token-efficient AI coding agent context"
 readme = "../../README.md"
-keywords = ["ai-agents", "mcp", "code-analysis", "tree-sitter", "context"]
+keywords = ["ai-agents", "mcp-server", "code-analysis", "tree-sitter", "context"]
 categories = ["command-line-utilities", "development-tools"]
 publish = false
 

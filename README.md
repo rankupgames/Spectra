@@ -1,15 +1,23 @@
-# Spectra
+# Spectra — local-first context for AI coding agents
 
-**An adaptive context runtime for local AI coding agents.**
+**An open-source Rust MCP server and CLI that gives AI coding agents fast, token-efficient codebase context.**
 
+[![CI](https://github.com/rankupgames/Spectra/actions/workflows/ci.yml/badge.svg)](https://github.com/rankupgames/Spectra/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/rankupgames/Spectra?sort=semver&display_name=tag&label=release&color=38BDF8)](https://github.com/rankupgames/Spectra/releases/latest)
 [![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-CE412B?logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![Version: 0.4.1](https://img.shields.io/badge/Version-0.4.1-38BDF8.svg)](https://github.com/rankupgames/Spectra/releases/tag/v0.4.1)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22C55E.svg)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/rankupgames/Spectra?style=flat&logo=github&label=stars)](https://github.com/rankupgames/Spectra/stargazers)
 [![Status: Prototype](https://img.shields.io/badge/Status-Prototype-F59E0B.svg)](#project-status)
 
-AI coding agents are good at working with code. They are less good at remembering a whole codebase without repeatedly loading file trees, source dumps, terminal logs, and old conversation into context.
+[Quickstart](#quickstart) · [Why Spectra?](#why-spectra) · [Benchmarks](#prototype-results) · [Supported agents](docs/agent-support.md) · [CLI reference](#cli-reference) · [Contributing](#contributing)
 
-Spectra is an experiment in fixing that. Its adaptive context runtime selects the smallest useful packet for the next decision, remembers which evidence an exact agent session has already received, and creates a visual map only when one is requested. The goal is simple: spend fewer tokens rediscovering context, and more of them doing the actual work.
+Spectra helps Codex, Claude Code, Cursor, Gemini CLI, and other local AI coding agents understand large codebases without repeatedly dumping source into the prompt. Its Tree-sitter-powered index covers 39 languages and dialects, then turns natural-language questions into bounded context packets with exact `path:start-end` anchors, code relationships, and optional architecture maps.
+
+Everything runs locally. Spectra watches the repository, keeps agent sessions current through a privacy-safe context ledger, and serves the result through the Model Context Protocol (MCP) or a standalone command-line interface.
+
+[![A Spectra architecture map showing an MCP request flowing into a budgeted context packet](docs/assets/spectra-context-map.png)](docs/assets/spectra-context-map.png)
+
+<p align="center"><em>A real Spectra map of its own MCP context pipeline.</em></p>
 
 ```text
 Query + lifecycle ──▶ adaptive selector ──▶ budgeted evidence packet
@@ -34,6 +42,8 @@ Most code-context tools answer with source and explanation together. That can be
 - **Stay current.** The MCP server watches served projects in the background, and every map retains a synchronous refresh fallback.
 - **Remember outcomes, not noise.** The Ledger keeps edits, test results, and blockers without saving full conversations or terminal output.
 - **Keep it local.** Parsing, indexing, rendering, selection, and replay all happen on your machine.
+
+If that sounds useful, [star Spectra](https://github.com/rankupgames/Spectra) to follow new releases and help more developers discover the project.
 
 ### Prototype results
 
